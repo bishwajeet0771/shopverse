@@ -2,7 +2,7 @@ name: ShopVerse CI/CD
 
 on:
   push:
-    branches: [devops-setup]
+    branches: [main]
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -46,13 +46,3 @@ jobs:
       - name: Run frontend lint
         working-directory: ./frontend
         run: npx eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0 --config .eslintrc.cjs
-  # ──────────────────────────────────────────────
-  # Stage 2: Security Scan
-  # ──────────────────────────────────────────────
-  
-          kubectl get secrets -n shopverse
-          echo ""
-          echo "--- Ingress ---"
-          kubectl get ingress -n shopverse 2>/dev/null || echo "No ingress configured"
- 
-
