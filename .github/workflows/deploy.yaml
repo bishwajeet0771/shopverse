@@ -255,17 +255,17 @@ jobs:
 
       - name: Deploy Helm chart
         run: |
-          helm upgrade --install shopverse \
-            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse \
-            --version 1.0.0-${{ github.sha }} \
-            --set frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
-            --set backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
-            --set mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }} \
-            --set mysql.password=${{ secrets.MYSQL_PASSWORD }} \
-            --set jwtSecret=${{ secrets.JWT_SECRET }} \
+          helm upgrade --install shopverse "oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse" \
+            --version "1.0.0-${{ github.sha }}" \
+            --set "frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}" \
+            --set "backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}" \
+            --set-string "mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }}" \
+            --set-string "mysql.password=${{ secrets.MYSQL_PASSWORD }}" \
+            --set-string "jwtSecret=${{ secrets.JWT_SECRET }}" \
             --namespace shopverse \
             --create-namespace \
-            --wait --timeout 300s \
+            --wait \
+            --timeout 300s \
             --cleanup-on-fail
 
       - name: Verify deployment
