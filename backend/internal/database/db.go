@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/shopverse/backend/internal/models"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
@@ -21,12 +21,19 @@ func Connect() {
 	dbPort := getEnv("DB_PORT", "3306")
 	dbName := getEnv("DB_NAME", "shopverse")
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		dbUser, dbPassword, dbHost, dbPort, dbName)
+	dsn := fmt.Sprintf(
+        "host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
+        dbHost,
+        dbUser,
+        dbPassword,
+        dbName,
+        dbPort,
+    )
+
 
 	var err error
 	for i := 1; i <= 10; i++ {
-		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
+		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
 			Logger: logger.Default.LogMode(logger.Info),
 		})
 		if err == nil {
