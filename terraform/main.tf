@@ -37,6 +37,67 @@ module "eks" {
 }
 
 # ──────────────────────────────────────────────
+# Existing Production PostgreSQL Secret
+# ──────────────────────────────────────────────
+data "aws_secretsmanager_secret" "shopverse_postgres" {
+  name = var.db_secret_name
+}
+
+# ──────────────────────────────────────────────
+# IAM Role for ShopVerse Backend
+# ──────────────────────────────────────────────
+resource "aws_iam_role" "shopverse_backend" {
+  name = "${var.cluster_name}-shopverse-backend"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Principal = {
+          Federated = module.eks.oidc_provider_arn
+        }
+
+        Action = "sts:AssumeRoleWithWebIdentity"
+
+        Condition = {
+          StringEquals = {
+            "${replace(module.eks.oidc_provider_url, "https://", "")}:sub" = "system:serviceaccount:shopverse:shopverse-backend"
+            "${replace(module.eks.oidc_provider_url, "https://", "")}:aud" = "sts.amazonaws.com"
+          }
+        }
+      }
+    ]
+  })
+
+  tags = local.common_tags
+}
+
+resource "aws_iam_role_policy" "shopverse_backend_secrets" {
+  name = "${var.cluster_name}-shopverse-backend-secrets"
+
+  role = aws_iam_role.shopverse_backend.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+
+    Statement = [
+      {
+        Effect = "Allow"
+
+        Action = [
+          "secretsmanager:GetSecretValue"
+        ]
+
+        Resource = data.aws_secretsmanager_secret.shopverse_postgres.arn
+      }
+    ]
+  })
+}
+
+# ──────────────────────────────────────────────
 # RDS PostgreSQL Module
 # ──────────────────────────────────────────────
 module "rds" {
