@@ -30,12 +30,6 @@ variable "username" {
   default     = "shopverse"
 }
 
-variable "password" {
-  description = "PostgreSQL master password"
-  type        = string
-  sensitive   = true
-}
-
 variable "engine_version" {
   description = "PostgreSQL engine version"
   type        = string
@@ -61,7 +55,7 @@ variable "max_allocated_storage" {
 }
 
 variable "backup_retention_period" {
-  description = "Backup retention period"
+  description = "Backup retention period in days"
   type        = number
   default     = 7
 }
