@@ -43,7 +43,9 @@ resource "aws_db_instance" "this" {
 
   db_name  = var.database_name
   username = var.username
-  password = var.password
+
+  # Let RDS manage the master password in Secrets Manager.
+  manage_master_user_password = true
 
   port = 5432
 
