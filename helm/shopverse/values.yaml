@@ -10,6 +10,7 @@ frontend:
   ingressName: shopverse-frontend-ingress
   ingressHost: ""
 
+
 # ──────────────────────────────────────
 # Backend
 # ──────────────────────────────────────
@@ -22,23 +23,17 @@ backend:
   ingressName: shopverse-backend-ingress
   ingressHost: ""
 
-# ──────────────────────────────────────
-# MySQL
-# ──────────────────────────────────────
-mysql:
-  database: shopverse
-  user: shopverse
-  rootPassword: ""
-  password: ""
-  storage: 5Gi
-  storageClass: gp2
-  resources:
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-    requests:
-      memory: "256Mi"
-      cpu: "250m"
+  # Kubernetes ServiceAccount used by the backend pod.
+  #
+  # This ServiceAccount must be connected to an AWS IAM role
+  # that has permission to read the PostgreSQL secret from
+  # AWS Secrets Manager.
+  serviceAccountName: shopverse-backend
+
+  # AWS Secrets Manager secret containing the RDS PostgreSQL
+  # connection information.
+  dbSecretName: Latest-Prod-ShopVerse-Postgres-Credentials
+
 
 # ──────────────────────────────────────
 # Shared
@@ -48,4 +43,12 @@ ingress:
   ingressClassName: traefik
   annotations: {}
 
+
+# ──────────────────────────────────────
+# JWT
+# ──────────────────────────────────────
+#
+# Keep this empty in values.yaml.
+# Supply the actual JWT secret during Helm deployment.
+#
 jwtSecret: ""
