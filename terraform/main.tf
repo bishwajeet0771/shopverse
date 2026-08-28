@@ -37,10 +37,47 @@ module "eks" {
 }
 
 # ──────────────────────────────────────────────
-# Existing Production PostgreSQL Secret
+# RDS PostgreSQL Module
 # ──────────────────────────────────────────────
-data "aws_secretsmanager_secret" "shopverse_postgres" {
-  name = var.db_secret_name
+module "rds" {
+  source = "./modules/rds"
+
+  name = "${var.project_name}-postgres"
+
+  vpc_id = module.vpc.vpc_id
+
+  private_subnet_ids = module.vpc.private_subnet_ids
+
+  # PostgreSQL access from EKS.
+  #
+  # IMPORTANT:
+  # Verify that this is the security group used by the
+  # backend workload/network path. If the backend traffic
+  # originates from the EKS node security group, use that
+  # security group instead.
+  allowed_security_group_ids = [
+    module.eks.cluster_security_group_id
+  ]
+
+  database_name = "shopverse"
+  username      = "shopverse"
+
+  engine_version = "16"
+
+  instance_class = "db.t4g.micro"
+
+  allocated_storage     = 20
+  max_allocated_storage = 100
+
+  backup_retention_period = 7
+
+  multi_az = false
+
+  deletion_protection = true
+
+  skip_final_snapshot = false
+
+  tags = local.common_tags
 }
 
 # ──────────────────────────────────────────────
@@ -75,6 +112,9 @@ resource "aws_iam_role" "shopverse_backend" {
   tags = local.common_tags
 }
 
+# ──────────────────────────────────────────────
+# Allow Backend to Read RDS Credentials
+# ──────────────────────────────────────────────
 resource "aws_iam_role_policy" "shopverse_backend_secrets" {
   name = "${var.cluster_name}-shopverse-backend-secrets"
 
@@ -91,60 +131,19 @@ resource "aws_iam_role_policy" "shopverse_backend_secrets" {
           "secretsmanager:GetSecretValue"
         ]
 
-        Resource = data.aws_secretsmanager_secret.shopverse_postgres.arn
+        Resource = module.rds.master_user_secret_arn
       }
     ]
   })
 }
 
 # ──────────────────────────────────────────────
-# RDS PostgreSQL Module
-# ──────────────────────────────────────────────
-module "rds" {
-  source = "./modules/rds"
-
-  name = "${var.project_name}-postgres"
-
-  vpc_id = module.vpc.vpc_id
-
-  private_subnet_ids = module.vpc.private_subnet_ids
-
-  # EKS cluster security group is attached to
-  # the EKS networking resources/nodes.
-  allowed_security_group_ids = [
-    module.eks.cluster_security_group_id
-  ]
-
-  database_name = "shopverse"
-  username      = "shopverse"
-
-  password = var.db_password
-
-  engine_version = "16"
-
-  instance_class = "db.t4g.micro"
-
-  allocated_storage     = 20
-  max_allocated_storage = 100
-
-  backup_retention_period = 7
-
-  multi_az = false
-
-  deletion_protection = true
-
-  skip_final_snapshot = false
-
-  tags = local.common_tags
-}
-
-
-# ──────────────────────────────────────────────
 # EC2 Jump Server Module (conditional)
 # ──────────────────────────────────────────────
 module "jump_server" {
   source = "./modules/ec2"
-  count  = var.create_jump_server ? 1 : 0
+
+  count = var.create_jump_server ? 1 : 0
 
   name              = "${var.project_name}-jump-server"
   vpc_id            = module.vpc.vpc_id
