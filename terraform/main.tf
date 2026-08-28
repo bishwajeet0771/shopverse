@@ -37,6 +37,48 @@ module "eks" {
 }
 
 # ──────────────────────────────────────────────
+# RDS PostgreSQL Module
+# ──────────────────────────────────────────────
+module "rds" {
+  source = "./modules/rds"
+
+  name = "${var.project_name}-postgres"
+
+  vpc_id = module.vpc.vpc_id
+
+  private_subnet_ids = module.vpc.private_subnet_ids
+
+  # EKS cluster security group is attached to
+  # the EKS networking resources/nodes.
+  allowed_security_group_ids = [
+    module.eks.cluster_security_group_id
+  ]
+
+  database_name = "shopverse"
+  username      = "shopverse"
+
+  password = var.db_password
+
+  engine_version = "16"
+
+  instance_class = "db.t4g.micro"
+
+  allocated_storage     = 20
+  max_allocated_storage = 100
+
+  backup_retention_period = 7
+
+  multi_az = false
+
+  deletion_protection = true
+
+  skip_final_snapshot = false
+
+  tags = local.common_tags
+}
+
+
+# ──────────────────────────────────────────────
 # EC2 Jump Server Module (conditional)
 # ──────────────────────────────────────────────
 module "jump_server" {
