@@ -87,3 +87,8 @@ variable "db_password" {
   type        = string
   sensitive   = true
 }
+
+variable "db_secret_name" {
+  description = "AWS Secrets Manager secret containing ShopVerse PostgreSQL credentials"
+  type        = string
+}
