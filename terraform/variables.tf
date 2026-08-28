@@ -81,3 +81,9 @@ variable "jump_server_allowed_ssh_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+variable "db_password" {
+  description = "Master password for ShopVerse PostgreSQL RDS"
+  type        = string
+  sensitive   = true
+}
