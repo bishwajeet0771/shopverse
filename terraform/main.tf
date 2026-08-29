@@ -56,7 +56,7 @@ module "rds" {
   # originates from the EKS node security group, use that
   # security group instead.
   allowed_security_group_ids = [
-    module.eks.cluster_security_group_id
+    module.eks.custom_cluster_security_group_id
   ]
 
   database_name = "shopverse"
