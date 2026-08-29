@@ -80,3 +80,24 @@ output "kubeconfig_command" {
   description = "Command to update kubeconfig"
   value       = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region}"
 }
+
+output "rds_endpoint" {
+  description = "RDS PostgreSQL endpoint"
+  value       = module.rds.db_endpoint
+}
+
+output "rds_port" {
+  description = "RDS PostgreSQL port"
+  value       = module.rds.db_port
+}
+
+output "rds_database_name" {
+  description = "RDS PostgreSQL database name"
+  value       = module.rds.db_name
+}
+
+output "rds_secret_arn" {
+  description = "RDS PostgreSQL master user secret ARN"
+  value       = module.rds.master_user_secret_arn
+  sensitive   = true
+}
