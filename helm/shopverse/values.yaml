@@ -33,6 +33,7 @@ backend:
   # AWS Secrets Manager secret containing the RDS PostgreSQL
   # connection information.
   dbSecretName: Latest-Prod-ShopVerse-Postgres-Credentials
+  databaseName: shopverse
 
 
 # ──────────────────────────────────────
