@@ -64,12 +64,12 @@ module "rds" {
 
   engine_version = "16"
 
-  instance_class = "db.t4g.micro"
+  instance_class = "db.t3.micro"
 
   allocated_storage     = 20
-  max_allocated_storage = 100
+  max_allocated_storage = 20
 
-  backup_retention_period = 7
+  backup_retention_period = 0
 
   multi_az = false
 
