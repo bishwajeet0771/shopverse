@@ -13,7 +13,7 @@ terraform {
   }
 
   backend "s3" {
-    bucket  = "shopverse-terraform-state"
+    bucket  = "shopverse-terraform-state-09-08-2026"
     key     = "eks/terraform.tfstate"
     region  = "us-east-1"
     encrypt = true
