@@ -2,7 +2,7 @@ name: ShopVerse CI/CD
 
 on:
   push:
-    branches: [dev]
+    branches: [main]
 
 env:
   AWS_REGION: ${{ secrets.AWS_REGION }}
@@ -30,7 +30,7 @@ jobs:
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
           cache-dependency-path: backend/go.sum
 
@@ -60,7 +60,8 @@ jobs:
 
       - name: Install frontend dependencies
         working-directory: ./frontend
-        run: npm ci
+        run: |
+          npm ci
 
       - name: Run frontend lint
         working-directory: ./frontend
@@ -85,17 +86,16 @@ jobs:
         uses: actions/checkout@v4
 
       # ----------------------------------------------------------
-      # IMPORTANT:
-      # The dependency update done in the "test" job does NOT
-      # automatically carry over to this separate GitHub runner.
+      # Go
       #
-      # Therefore we update pgx again before building the backend.
+      # Each GitHub Actions job has a fresh runner.
+      # Therefore pgx must be upgraded again here before
+      # building the backend image.
       # ----------------------------------------------------------
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
           cache-dependency-path: backend/go.sum
 
@@ -109,9 +109,8 @@ jobs:
           go list -m github.com/jackc/pgx/v5
 
       # ----------------------------------------------------------
-      # Build images
+      # Build images for security scanning
       # ----------------------------------------------------------
-
       - name: Build frontend image
         run: |
           docker build \
@@ -127,13 +126,13 @@ jobs:
       # ----------------------------------------------------------
       # Install Trivy
       # ----------------------------------------------------------
-
       - name: Install Trivy
         run: |
           sudo apt-get update
           sudo apt-get install -y wget apt-transport-https gnupg
 
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key \
+          wget -qO - \
+            https://aquasecurity.github.io/trivy-repo/deb/public.key \
             | gpg --dearmor \
             | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
 
@@ -146,7 +145,6 @@ jobs:
       # ----------------------------------------------------------
       # Trivy frontend
       # ----------------------------------------------------------
-
       - name: Run Trivy scan on frontend
         run: |
           trivy image \
@@ -159,7 +157,6 @@ jobs:
       # ----------------------------------------------------------
       # Trivy backend
       # ----------------------------------------------------------
-
       - name: Run Trivy scan on backend
         run: |
           trivy image \
@@ -185,7 +182,6 @@ jobs:
       # ----------------------------------------------------------
       # AWS
       # ----------------------------------------------------------
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -194,20 +190,48 @@ jobs:
           aws-region: ${{ env.AWS_REGION }}
 
       # ----------------------------------------------------------
+      # Go
+      #
+      # IMPORTANT:
+      # This is a new runner. Upgrade pgx here as well so that
+      # the actual production backend image contains pgx 5.9.0.
+      # ----------------------------------------------------------
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.25"
+          cache: true
+          cache-dependency-path: backend/go.sum
+
+      - name: Upgrade vulnerable pgx dependency
+        working-directory: ./backend
+        run: |
+          go get github.com/jackc/pgx/v5@v5.9.0
+          go mod tidy
+
+          echo "Production image pgx version:"
+          go list -m github.com/jackc/pgx/v5
+
+      # ----------------------------------------------------------
       # ECR
       # ----------------------------------------------------------
-
       - name: Login to Amazon ECR
         id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
       - name: Ensure ECR repositories exist
         run: |
-          for repo in shopverse-frontend shopverse-backend shopverse-helmchart/shopverse; do
+          for repo in \
+            shopverse-frontend \
+            shopverse-backend \
+            shopverse-helmchart/shopverse
+          do
 
             if aws ecr describe-repositories \
               --repository-names "$repo" \
-              --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+              --region "${{ env.AWS_REGION }}" \
+              >/dev/null 2>&1
+            then
 
               echo "ECR repository already exists: $repo"
 
@@ -226,53 +250,48 @@ jobs:
       # ----------------------------------------------------------
       # Build frontend
       # ----------------------------------------------------------
-
       - name: Build and tag frontend image
         run: |
           docker build \
-            -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
-            -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest \
+            -t "${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}" \
+            -t "${{ env.ECR_REGISTRY }}/shopverse-frontend:latest" \
             ./frontend
 
       # ----------------------------------------------------------
       # Build backend
       # ----------------------------------------------------------
-
       - name: Build and tag backend image
         run: |
           docker build \
-            -t ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
-            -t ${{ env.ECR_REGISTRY }}/shopverse-backend:latest \
+            -t "${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}" \
+            -t "${{ env.ECR_REGISTRY }}/shopverse-backend:latest" \
             ./backend
 
       # ----------------------------------------------------------
       # Push frontend
       # ----------------------------------------------------------
-
       - name: Push frontend image
         run: |
           docker push \
-            ${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}
+            "${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}"
 
           docker push \
-            ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest
+            "${{ env.ECR_REGISTRY }}/shopverse-frontend:latest"
 
       # ----------------------------------------------------------
       # Push backend
       # ----------------------------------------------------------
-
       - name: Push backend image
         run: |
           docker push \
-            ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}
+            "${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}"
 
           docker push \
-            ${{ env.ECR_REGISTRY }}/shopverse-backend:latest
+            "${{ env.ECR_REGISTRY }}/shopverse-backend:latest"
 
       # ----------------------------------------------------------
       # Helm
       # ----------------------------------------------------------
-
       - name: Install Helm
         uses: azure/setup-helm@v4
 
@@ -292,14 +311,14 @@ jobs:
       - name: Package Helm chart
         run: |
           helm package ./helm/shopverse \
-            --version 1.0.0-${{ github.sha }} \
-            --app-version ${{ github.sha }}
+            --version "1.0.0-${{ github.sha }}" \
+            --app-version "${{ github.sha }}"
 
       - name: Push Helm chart to ECR
         run: |
           helm push \
-            shopverse-1.0.0-${{ github.sha }}.tgz \
-            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart
+            "shopverse-1.0.0-${{ github.sha }}.tgz" \
+            "oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart"
 
 
   # ============================================================
@@ -311,14 +330,12 @@ jobs:
     needs: build-and-push
 
     steps:
-
       - name: Checkout repository
         uses: actions/checkout@v4
 
       # ----------------------------------------------------------
       # AWS
       # ----------------------------------------------------------
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -326,16 +343,17 @@ jobs:
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
 
-      # ==========================================================
+      # ----------------------------------------------------------
       # Check EKS
-      # ==========================================================
-
+      # ----------------------------------------------------------
       - name: Check if EKS cluster exists
         id: check-cluster
         run: |
           if aws eks describe-cluster \
             --name "${{ env.EKS_CLUSTER_NAME }}" \
-            --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
+            --region "${{ env.AWS_REGION }}" \
+            >/dev/null 2>&1
+          then
 
             echo "cluster_exists=true" >> "$GITHUB_OUTPUT"
 
@@ -345,22 +363,19 @@ jobs:
 
             echo "cluster_exists=false" >> "$GITHUB_OUTPUT"
 
-            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' NOT found."
+            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' not found."
 
           fi
 
       # ==========================================================
       # Terraform
       # ==========================================================
-
       - name: Setup Terraform
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.7.0"
 
       - name: Terraform Init
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
         run: |
           terraform init \
@@ -390,7 +405,6 @@ jobs:
       # ==========================================================
       # Wait for EKS
       # ==========================================================
-
       - name: Wait for EKS cluster to be active
         if: steps.check-cluster.outputs.cluster_exists == 'false'
         run: |
@@ -410,39 +424,8 @@ jobs:
           echo "Cluster and nodes are ready."
 
       # ==========================================================
-      # Install AWS Load Balancer Controller
+      # Update kubeconfig
       # ==========================================================
-
-      - name: Install AWS Load Balancer Controller
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        run: |
-
-          aws eks update-kubeconfig \
-            --name "${{ env.EKS_CLUSTER_NAME }}" \
-            --region "${{ env.AWS_REGION }}"
-
-          helm repo add eks https://aws.github.io/eks-charts
-          helm repo update
-
-          ALB_ROLE_ARN=$(cd terraform && terraform output -raw alb_controller_role_arn)
-
-          echo "ALB Controller IAM role:"
-          echo "$ALB_ROLE_ARN"
-
-          helm upgrade --install aws-load-balancer-controller \
-            eks/aws-load-balancer-controller \
-            --namespace kube-system \
-            --set clusterName="${{ env.EKS_CLUSTER_NAME }}" \
-            --set serviceAccount.create=true \
-            --set serviceAccount.name=aws-load-balancer-controller \
-            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"="$ALB_ROLE_ARN" \
-            --wait \
-            --timeout 300s
-
-      # ==========================================================
-      # kubectl / Helm
-      # ==========================================================
-
       - name: Install kubectl
         uses: azure/setup-kubectl@v4
 
@@ -455,34 +438,73 @@ jobs:
             --name "${{ env.EKS_CLUSTER_NAME }}" \
             --region "${{ env.AWS_REGION }}"
 
-      # ==========================================================
-      # Verify Kubernetes connection
-      # ==========================================================
-
       - name: Verify EKS connection
         run: |
           kubectl cluster-info
           kubectl get nodes
 
       # ==========================================================
-      # Get ShopVerse backend IAM role
+      # AWS Load Balancer Controller
       # ==========================================================
-
-      - name: Get backend IAM role ARN
+      - name: Install AWS Load Balancer Controller
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        working-directory: .
         run: |
 
-          ROLE_NAME="${{ env.EKS_CLUSTER_NAME }}-shopverse-backend"
+          helm repo add eks https://aws.github.io/eks-charts
+          helm repo update
 
-          echo "Looking for IAM role:"
-          echo "$ROLE_NAME"
+          ALB_ROLE_ARN=$(cd terraform && terraform output -raw alb_controller_role_arn)
 
-          BACKEND_ROLE_ARN=$(aws iam get-role \
-            --role-name "$ROLE_NAME" \
-            --query 'Role.Arn' \
-            --output text)
+          if [ -z "$ALB_ROLE_ARN" ]; then
+            echo "ERROR: ALB controller IAM role ARN was not found."
+            exit 1
+          fi
 
-          if [ -z "$BACKEND_ROLE_ARN" ] || [ "$BACKEND_ROLE_ARN" = "None" ]; then
-            echo "ERROR: Backend IAM role was not found."
+          echo "ALB Controller IAM role:"
+          echo "$ALB_ROLE_ARN"
+
+          helm upgrade --install aws-load-balancer-controller \
+            eks/aws-load-balancer-controller \
+            --namespace kube-system \
+            --create-namespace \
+            --set "clusterName=${{ env.EKS_CLUSTER_NAME }}" \
+            --set "serviceAccount.create=true" \
+            --set "serviceAccount.name=aws-load-balancer-controller" \
+            --set "serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${ALB_ROLE_ARN}" \
+            --wait \
+            --timeout 300s
+
+      # ==========================================================
+      # Get ShopVerse Backend IAM Role
+      #
+      # IMPORTANT:
+      # Your Terraform must expose:
+      #
+      # output "shopverse_backend_role_arn" {
+      #   value = aws_iam_role.shopverse_backend.arn
+      # }
+      # ==========================================================
+      - name: Get ShopVerse backend IAM role ARN
+        id: backend-role
+        working-directory: ./terraform
+        run: |
+
+          echo "Reading ShopVerse backend IAM role from Terraform..."
+
+          BACKEND_ROLE_ARN=$(terraform output -raw shopverse_backend_role_arn 2>/dev/null || true)
+
+          if [ -z "$BACKEND_ROLE_ARN" ]; then
+            echo "ERROR: shopverse_backend_role_arn was not found in Terraform outputs."
+            echo ""
+            echo "Available Terraform outputs:"
+            terraform output
+            echo ""
+            echo "Make sure terraform/outputs.tf contains:"
+            echo ""
+            echo 'output "shopverse_backend_role_arn" {'
+            echo '  value = aws_iam_role.shopverse_backend.arn'
+            echo '}'
             exit 1
           fi
 
@@ -492,9 +514,22 @@ jobs:
           echo "BACKEND_ROLE_ARN=$BACKEND_ROLE_ARN" >> "$GITHUB_ENV"
 
       # ==========================================================
-      # Login to ECR for Helm
+      # Verify backend IAM role
       # ==========================================================
+      - name: Verify backend IAM role
+        run: |
 
+          echo "Backend IAM role:"
+          echo "$BACKEND_ROLE_ARN"
+
+          if [[ "$BACKEND_ROLE_ARN" != arn:aws:iam::*:role/* ]]; then
+            echo "ERROR: Invalid IAM role ARN."
+            exit 1
+          fi
+
+      # ==========================================================
+      # Login Helm to ECR
+      # ==========================================================
       - name: Login to ECR for Helm
         run: |
           aws ecr get-login-password \
@@ -505,24 +540,44 @@ jobs:
             "${{ env.ECR_REGISTRY }}"
 
       # ==========================================================
+      # Verify Helm chart
+      # ==========================================================
+      - name: Verify Helm chart
+        run: |
+
+          echo "Checking Helm chart..."
+
+          helm show chart \
+            "oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse" \
+            --version "1.0.0-${{ github.sha }}"
+
+      # ==========================================================
       # Deploy ShopVerse
       # ==========================================================
-
       - name: Deploy Helm chart
         run: |
 
           echo "Deploying ShopVerse..."
 
+          echo "ECR Registry:"
+          echo "${{ env.ECR_REGISTRY }}"
+
+          echo "Chart version:"
+          echo "1.0.0-${{ github.sha }}"
+
           echo "Backend IAM role:"
           echo "$BACKEND_ROLE_ARN"
 
-          helm upgrade --install shopverse \
-            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse \
-            --version 1.0.0-${{ github.sha }} \
-            --set frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
-            --set backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
-            --set backend.iamRoleArn="$BACKEND_ROLE_ARN" \
-            --set jwtSecret="${{ secrets.JWT_SECRET }}" \
+          helm upgrade --install \
+            shopverse \
+            "oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse" \
+            --version "1.0.0-${{ github.sha }}" \
+            --set "frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}" \
+            --set "backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}" \
+            --set "backend.iamRoleArn=${BACKEND_ROLE_ARN}" \
+            --set "mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }}" \
+            --set "mysql.password=${{ secrets.MYSQL_PASSWORD }}" \
+            --set "jwtSecret=${{ secrets.JWT_SECRET }}" \
             --namespace shopverse \
             --create-namespace \
             --wait \
@@ -532,83 +587,101 @@ jobs:
       # ==========================================================
       # Verify deployment
       # ==========================================================
-
       - name: Verify deployment
         run: |
 
           echo ""
           echo "========================================"
-          echo "           Kubernetes Nodes"
+          echo "             Nodes"
           echo "========================================"
+
           kubectl get nodes -o wide
 
           echo ""
           echo "========================================"
-          echo "           Service Accounts"
+          echo "        Service Accounts"
           echo "========================================"
-          kubectl get serviceaccount \
-            -n shopverse
+
+          kubectl get serviceaccount -n shopverse
 
           echo ""
           echo "========================================"
-          echo "           Backend ServiceAccount"
+          echo "       Backend ServiceAccount"
           echo "========================================"
+
           kubectl describe serviceaccount \
             shopverse-backend \
             -n shopverse
 
           echo ""
           echo "========================================"
-          echo "           Pods"
+          echo "             Pods"
           echo "========================================"
+
           kubectl get pods \
             -n shopverse \
             -o wide
 
           echo ""
           echo "========================================"
-          echo "           Deployments"
+          echo "          Deployments"
           echo "========================================"
+
           kubectl get deployments \
             -n shopverse
 
           echo ""
           echo "========================================"
-          echo "           Services"
+          echo "            StatefulSets"
           echo "========================================"
+
+          kubectl get sts \
+            -n shopverse
+
+          echo ""
+          echo "========================================"
+          echo "             Services"
+          echo "========================================"
+
           kubectl get svc \
             -n shopverse
 
           echo ""
           echo "========================================"
-          echo "           PV & PVC"
+          echo "             PV & PVC"
           echo "========================================"
+
           kubectl get pv,pvc \
             -n shopverse
 
           echo ""
           echo "========================================"
-          echo "           Secrets"
+          echo "             Secrets"
           echo "========================================"
+
           kubectl get secrets \
             -n shopverse
 
           echo ""
           echo "========================================"
-          echo "           Ingress"
+          echo "             Ingress"
           echo "========================================"
+
           kubectl get ingress \
             -n shopverse \
             2>/dev/null || echo "No ingress configured"
 
           echo ""
           echo "========================================"
-          echo "           Backend Pods"
+          echo "      Backend Pod Status"
           echo "========================================"
+
           kubectl get pods \
             -n shopverse \
             -l component=backend \
             -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.status.phase}{"\n"}{end}'
 
           echo ""
-          echo "Deployment verification complete."
+          echo "========================================"
+          echo "       ShopVerse Deployment Complete"
+          echo "========================================"
