@@ -40,11 +40,31 @@ jobs:
         run: |
           go version
 
-      - name: Verify backend dependencies
+      - name: Download Go dependencies
+        working-directory: ./backend
+        run: |
+          go mod download
+
+      - name: Verify pgx version
         working-directory: ./backend
         run: |
           echo "Checking pgx version..."
-          go list -m github.com/jackc/pgx/v5
+          PGX_VERSION=$(go list -m -f '{{.Version}}' github.com/jackc/pgx/v5)
+
+          echo "Resolved pgx version: $PGX_VERSION"
+
+          if [ "$PGX_VERSION" != "v5.9.0" ]; then
+            echo "ERROR: Expected pgx v5.9.0"
+            echo "Found: $PGX_VERSION"
+            exit 1
+          fi
+
+          echo "pgx version is secure: $PGX_VERSION"
+
+      - name: Verify Go modules
+        working-directory: ./backend
+        run: |
+          go mod verify
 
       - name: Run Go tests
         working-directory: ./backend
@@ -105,10 +125,27 @@ jobs:
         run: |
           go version
 
+      - name: Download Go dependencies
+        working-directory: ./backend
+        run: |
+          go mod download
+
       - name: Verify pgx version
         working-directory: ./backend
         run: |
-          go list -m github.com/jackc/pgx/v5
+          echo "Checking pgx version..."
+
+          PGX_VERSION=$(go list -m -f '{{.Version}}' github.com/jackc/pgx/v5)
+
+          echo "Resolved pgx version: $PGX_VERSION"
+
+          if [ "$PGX_VERSION" != "v5.9.0" ]; then
+            echo "ERROR: Expected pgx v5.9.0"
+            echo "Found: $PGX_VERSION"
+            exit 1
+          fi
+
+          echo "pgx version is secure: $PGX_VERSION"
 
       # ----------------------------------------------------------
       # Build images
@@ -133,7 +170,11 @@ jobs:
       - name: Install Trivy
         run: |
           sudo apt-get update
-          sudo apt-get install -y wget apt-transport-https gnupg
+
+          sudo apt-get install -y \
+            wget \
+            apt-transport-https \
+            gnupg
 
           wget -qO - \
             https://aquasecurity.github.io/trivy-repo/deb/public.key \
@@ -144,7 +185,10 @@ jobs:
             | sudo tee /etc/apt/sources.list.d/trivy.list
 
           sudo apt-get update -q
+
           sudo apt-get install -y trivy
+
+          trivy --version
 
       # ----------------------------------------------------------
       # Trivy frontend
@@ -215,7 +259,14 @@ jobs:
       - name: Verify pgx version
         working-directory: ./backend
         run: |
-          go list -m github.com/jackc/pgx/v5
+          PGX_VERSION=$(go list -m -f '{{.Version}}' github.com/jackc/pgx/v5)
+
+          echo "pgx version: $PGX_VERSION"
+
+          if [ "$PGX_VERSION" != "v5.9.0" ]; then
+            echo "ERROR: Expected pgx v5.9.0"
+            exit 1
+          fi
 
       # ----------------------------------------------------------
       # ECR
@@ -344,9 +395,9 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ==========================================================
+      # ----------------------------------------------------------
       # AWS
-      # ==========================================================
+      # ----------------------------------------------------------
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -361,6 +412,7 @@ jobs:
 
       - name: Check if EKS cluster exists
         id: check-cluster
+        shell: bash
         run: |
 
           if aws eks describe-cluster \
@@ -401,10 +453,6 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}"
 
 
-      # ----------------------------------------------------------
-      # Terraform Plan
-      # ----------------------------------------------------------
-
       - name: Terraform Plan
         if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
@@ -417,10 +465,6 @@ jobs:
             -var="create_jump_server=false" \
             -out=tfplan
 
-
-      # ----------------------------------------------------------
-      # Terraform Apply
-      # ----------------------------------------------------------
 
       - name: Terraform Apply
         if: steps.check-cluster.outputs.cluster_exists == 'false'
@@ -497,8 +541,7 @@ jobs:
       # AWS Load Balancer Controller
       # ==========================================================
 
-      - name: Install AWS Load Balancer Controller
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
+      - name: Install / Upgrade AWS Load Balancer Controller
         run: |
 
           helm repo add eks \
@@ -506,27 +549,68 @@ jobs:
 
           helm repo update
 
-          ALB_ROLE_ARN=$(cd terraform && terraform output -raw alb_controller_role_arn)
+          echo "Checking AWS Load Balancer Controller..."
 
-          if [ -z "$ALB_ROLE_ARN" ]; then
-            echo "ERROR: ALB controller IAM role ARN not found."
-            exit 1
-          fi
-
-          echo "ALB Controller role:"
-          echo "$ALB_ROLE_ARN"
-
-          helm upgrade --install \
+          if helm status \
             aws-load-balancer-controller \
-            eks/aws-load-balancer-controller \
             --namespace kube-system \
-            --create-namespace \
-            --set "clusterName=${{ env.EKS_CLUSTER_NAME }}" \
-            --set "serviceAccount.create=true" \
-            --set "serviceAccount.name=aws-load-balancer-controller" \
-            --set "serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${ALB_ROLE_ARN}" \
-            --wait \
-            --timeout 300s
+            >/dev/null 2>&1
+          then
+
+            echo "AWS Load Balancer Controller already installed."
+
+          else
+
+            echo "AWS Load Balancer Controller is not installed."
+
+            ALB_ROLE_ARN=""
+
+            # ----------------------------------------------------
+            # Try Terraform output first.
+            # ----------------------------------------------------
+
+            if terraform -chdir=terraform output \
+              -raw alb_controller_role_arn \
+              >/dev/null 2>&1
+            then
+
+              ALB_ROLE_ARN=$(terraform \
+                -chdir=terraform \
+                output -raw alb_controller_role_arn)
+
+            fi
+
+            # ----------------------------------------------------
+            # Validate role.
+            # ----------------------------------------------------
+
+            if [ -z "$ALB_ROLE_ARN" ]; then
+
+              echo "ERROR: Could not determine ALB controller IAM role ARN."
+
+              echo "Make sure Terraform provides:"
+              echo "alb_controller_role_arn"
+
+              exit 1
+
+            fi
+
+            echo "ALB Controller IAM role:"
+            echo "$ALB_ROLE_ARN"
+
+            helm upgrade --install \
+              aws-load-balancer-controller \
+              eks/aws-load-balancer-controller \
+              --namespace kube-system \
+              --create-namespace \
+              --set "clusterName=${{ env.EKS_CLUSTER_NAME }}" \
+              --set "serviceAccount.create=true" \
+              --set "serviceAccount.name=aws-load-balancer-controller" \
+              --set "serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${ALB_ROLE_ARN}" \
+              --wait \
+              --timeout 300s
+
+          fi
 
 
       # ==========================================================
@@ -535,6 +619,7 @@ jobs:
 
       - name: Get backend IAM role ARN
         id: backend-role
+        shell: bash
         run: |
 
           echo "Searching for ShopVerse backend IAM role..."
@@ -542,41 +627,52 @@ jobs:
           BACKEND_ROLE_ARN=""
 
           # ------------------------------------------------------
-          # First try Terraform output.
+          # Try Terraform output.
           # ------------------------------------------------------
 
-          if [ -f "./terraform/terraform.tfstate" ]; then
+          echo "Trying Terraform output..."
 
-            echo "Trying Terraform output..."
+          BACKEND_ROLE_ARN=$(terraform \
+            -chdir=terraform \
+            output -raw shopverse_backend_role_arn \
+            2>/dev/null || true)
 
-            BACKEND_ROLE_ARN=$(cd terraform && \
-              terraform output -raw shopverse_backend_role_arn 2>/dev/null || true)
+          # ------------------------------------------------------
+          # If output unavailable, try alternative output name.
+          # ------------------------------------------------------
+
+          if [ -z "$BACKEND_ROLE_ARN" ]; then
+
+            echo "Trying backend_role_arn..."
+
+            BACKEND_ROLE_ARN=$(terraform \
+              -chdir=terraform \
+              output -raw backend_role_arn \
+              2>/dev/null || true)
 
           fi
 
           # ------------------------------------------------------
-          # If Terraform output is unavailable, search IAM.
-          #
-          # Adjust this role name if your Terraform uses another
-          # naming convention.
+          # If Terraform output unavailable, search IAM.
           # ------------------------------------------------------
 
           if [ -z "$BACKEND_ROLE_ARN" ]; then
 
             ROLE_NAME="${{ env.EKS_CLUSTER_NAME }}-shopverse-backend"
 
-            echo "Terraform output unavailable."
-            echo "Trying IAM role: $ROLE_NAME"
+            echo "Trying IAM role:"
+            echo "$ROLE_NAME"
 
             BACKEND_ROLE_ARN=$(aws iam get-role \
               --role-name "$ROLE_NAME" \
               --query 'Role.Arn' \
-              --output text 2>/dev/null || true)
+              --output text \
+              2>/dev/null || true)
 
           fi
 
           # ------------------------------------------------------
-          # Validate
+          # Validate.
           # ------------------------------------------------------
 
           if [ -z "$BACKEND_ROLE_ARN" ] || \
@@ -585,12 +681,24 @@ jobs:
             echo ""
             echo "ERROR: ShopVerse backend IAM role was not found."
             echo ""
-            echo "Expected Terraform output:"
+            echo "The Terraform configuration must create an IAM role"
+            echo "for the Kubernetes ServiceAccount:"
+            echo ""
+            echo "shopverse-backend"
+            echo ""
+            echo "and provide Terraform output:"
+            echo ""
             echo "shopverse_backend_role_arn"
             echo ""
-            echo "Or expected IAM role:"
-            echo "${{ env.EKS_CLUSTER_NAME }}-shopverse-backend"
-            echo ""
+
+            exit 1
+
+          fi
+
+          if [[ "$BACKEND_ROLE_ARN" != arn:aws:iam::*:role/* ]]; then
+
+            echo "ERROR: Invalid IAM role ARN:"
+            echo "$BACKEND_ROLE_ARN"
 
             exit 1
 
@@ -603,23 +711,21 @@ jobs:
 
 
       # ==========================================================
-      # Verify Backend IAM role
+      # Verify backend IAM permissions
       # ==========================================================
 
-      - name: Verify backend IAM role
+      - name: Verify backend IAM role exists
         run: |
 
-          if [[ "$BACKEND_ROLE_ARN" != arn:aws:iam::*:role/* ]]; then
+          echo "Verifying backend IAM role..."
 
-            echo "ERROR: Invalid backend IAM role ARN:"
-            echo "$BACKEND_ROLE_ARN"
+          aws iam get-role \
+            --role-name "${BACKEND_ROLE_ARN##*/}" \
+            --query 'Role.[RoleName,Arn]' \
+            --output table
 
-            exit 1
-
-          fi
-
-          echo "Backend IAM role is valid:"
-          echo "$BACKEND_ROLE_ARN"
+          echo ""
+          echo "Backend IAM role verified."
 
 
       # ==========================================================
@@ -656,6 +762,7 @@ jobs:
       # ==========================================================
 
       - name: Deploy Helm chart
+        shell: bash
         run: |
 
           echo "=========================================="
@@ -668,10 +775,13 @@ jobs:
           echo "Chart:"
           echo "shopverse"
 
-          echo "Version:"
+          echo "Chart Version:"
           echo "1.0.0-${{ github.sha }}"
 
-          echo "Backend IAM role:"
+          echo "Backend ServiceAccount:"
+          echo "shopverse-backend"
+
+          echo "Backend IAM Role:"
           echo "$BACKEND_ROLE_ARN"
 
           echo "=========================================="
@@ -685,8 +795,6 @@ jobs:
             --set "backend.iamRoleArn=${BACKEND_ROLE_ARN}" \
             --set "backend.serviceAccountName=shopverse-backend" \
             --set "backend.dbSecretName=Latest-Prod-ShopVerse-Postgres-Credentials" \
-            --set "mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }}" \
-            --set "mysql.password=${{ secrets.MYSQL_PASSWORD }}" \
             --set "jwtSecret=${{ secrets.JWT_SECRET }}" \
             --namespace shopverse \
             --create-namespace \
@@ -700,6 +808,7 @@ jobs:
       # ==========================================================
 
       - name: Verify deployment
+        shell: bash
         run: |
 
           echo ""
