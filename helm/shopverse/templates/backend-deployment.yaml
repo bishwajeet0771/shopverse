@@ -5,64 +5,39 @@ metadata:
   labels:
     app: shopverse
     component: backend
-
 spec:
   replicas: {{ .Values.backend.replicas }}
-
   selector:
     matchLabels:
       app: shopverse
       component: backend
-
   template:
     metadata:
       labels:
         app: shopverse
         component: backend
-
     spec:
-      # Kubernetes ServiceAccount mapped to an AWS IAM role.
-      # This allows the pod to read the RDS credentials
-      # directly from AWS Secrets Manager.
-      serviceAccountName: {{ .Values.backend.serviceAccountName }}
-
       containers:
         - name: backend
-
           image: {{ .Values.backend.image | quote }}
-
           imagePullPolicy: IfNotPresent
-
           ports:
             - containerPort: 8080
               protocol: TCP
-
-          # Non-secret application configuration.
-          # DB_HOST, DB_PORT, DB_NAME, DB_USER and DB_SSLMODE
-          # do NOT need to be stored here when db.go reads
-          # the complete RDS configuration from Secrets Manager.
           envFrom:
             - configMapRef:
                 name: shopverse-config
-
           env:
-            # Name of the AWS Secrets Manager secret.
-            #
-            # db.go uses this variable:
-            # DB_SECRET_NAME
-            #
-            # The pod uses its ServiceAccount/IAM role to call
-            # AWS Secrets Manager and retrieve the credentials.
-            - name: DB_SECRET_NAME
-              value: {{ .Values.backend.dbSecretName | quote }}
-
-            # JWT secret is still stored in Kubernetes Secret.
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: shopverse-secret
+                  key: DB_PASSWORD
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
                   name: shopverse-secret
                   key: JWT_SECRET
-
           resources:
             limits:
               memory: "256Mi"
@@ -70,14 +45,12 @@ spec:
             requests:
               memory: "128Mi"
               cpu: "100m"
-
           livenessProbe:
             httpGet:
               path: /health
               port: 8080
             initialDelaySeconds: 15
             periodSeconds: 30
-
           readinessProbe:
             httpGet:
               path: /health
