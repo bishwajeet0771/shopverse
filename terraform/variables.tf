@@ -62,6 +62,45 @@ variable "node_max_size" {
 }
 
 # ──────────────────────────────────────────────
+# RDS (Postgres)
+# ──────────────────────────────────────────────
+variable "db_name" {
+  description = "Initial Postgres database name"
+  type        = string
+  default     = "shopverse"
+}
+
+variable "db_username" {
+  description = "Master username for RDS"
+  type        = string
+  default     = "shopverse"
+}
+
+variable "db_password" {
+  description = "Master password for RDS (pass via TF_VAR_db_password / CI secret, never commit)"
+  type        = string
+  sensitive   = true
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_multi_az" {
+  description = "Enable Multi-AZ standby for RDS (recommended for production HA)"
+  type        = bool
+  default     = false
+}
+
+variable "db_deletion_protection" {
+  description = "Prevent accidental deletion of the RDS instance (recommended: true for production)"
+  type        = bool
+  default     = true
+}
+
+# ──────────────────────────────────────────────
 # Jump Server (EC2)
 # ──────────────────────────────────────────────
 variable "create_jump_server" {
