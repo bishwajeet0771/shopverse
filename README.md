@@ -1,6 +1,6 @@
 # ShopVerse - Full-Stack E-Commerce Application
 
-A production-ready 3-tier e-commerce web application built with React, Go (Fiber), and MySQL, deployed on AWS EKS using Helm charts.
+A production-ready 3-tier e-commerce web application built with React, Go (Fiber), and **AWS RDS Postgres**, deployed on AWS EKS using Helm charts.
 
 
 
@@ -12,6 +12,8 @@ A production-ready 3-tier e-commerce web application built with React, Go (Fiber
 ```
 https://youtu.be/XQrJrf6pUvk?si=XGsLPOm6YC1AEJFk
 ```
+
+> **Note:** The video/thumbnail above reflects the original MySQL-based architecture. The database layer has since been migrated to AWS RDS (Postgres) — see the architecture and steps below for the current setup.
 
 ## Architecture:
 
@@ -33,12 +35,17 @@ https://youtu.be/XQrJrf6pUvk?si=XGsLPOm6YC1AEJFk
            | 2 replicas       |     | 2 replicas           |
            +--------+---------+     +----------------------+
                     |
-           +--------v---------+
-           | MySQL StatefulSet|
-           | Port 3306        |
-           | 5Gi PVC (gp2)   |
-           +------------------+
+                    | (private subnet, port 5432, SG-restricted)
+                    |
+           +--------v---------------+
+           | AWS RDS Postgres        |
+           | db.t3.micro             |
+           | Multi-AZ: optional      |
+           | 20Gi gp3, encrypted     |
+           +--------------------------+
 ```
+
+The database now runs **outside the EKS cluster** as a managed AWS RDS instance, in the same VPC's private subnets. The backend reaches it over the internal network; nothing outside the EKS node security group can connect to it.
 
 ## Tech Stack
 
@@ -46,10 +53,10 @@ https://youtu.be/XQrJrf6pUvk?si=XGsLPOm6YC1AEJFk
 |----------|--------------------------------|
 | Frontend | React 18, TailwindCSS, Vite    |
 | Backend  | Go 1.21, Fiber, GORM, JWT      |
-| Database | MySQL 8.0 (StatefulSet)        |
-| Infra    | AWS EKS, ECR, ALB, Terraform   |
+| Database | AWS RDS Postgres 16 (db.t3.micro) |
+| Infra    | AWS EKS, ECR, ALB, RDS, Terraform |
 | CI/CD    | GitHub Actions, Helm, Trivy    |
-| IaC      | Terraform Modules (VPC, EKS, EC2) |
+| IaC      | Terraform Modules (VPC, EKS, RDS, EC2) |
 
 ## API Endpoints
 
@@ -105,7 +112,7 @@ npm run dev
 ```bash
 cd backend
 go mod tidy
-DB_HOST=localhost DB_USER=shopverse DB_PASSWORD=shopverse123 DB_NAME=shopverse go run ./cmd/main.go
+DB_HOST=localhost DB_PORT=5432 DB_USER=shopverse DB_PASSWORD=shopverse123 DB_NAME=shopverse DB_SSLMODE=disable go run ./cmd/main.go
 ```
 
 ---
@@ -143,7 +150,7 @@ aws sts get-caller-identity
 
 ### Step 2: Create AWS Infrastructure using Terraform
 
-Terraform modules will create: VPC, EKS Cluster, Node Group, IAM Roles, Jump Server (EC2).
+Terraform modules will create: VPC, EKS Cluster, Node Group, IAM Roles, RDS Postgres instance (`db.t3.micro`), Jump Server (EC2).
 
 See [terraform/README.md](terraform/README.md) for detailed Terraform instructions.
 
@@ -161,7 +168,11 @@ aws s3api put-bucket-versioning \
 
 # Copy and edit variables
 cp terraform.tfvars.example terraform.tfvars
-# Edit terraform.tfvars with your values (cluster name, region, instance types, etc.)
+# Edit terraform.tfvars with your values (cluster name, region, instance types, db_name, db_username, etc.)
+
+# The RDS master password is NOT set in terraform.tfvars — pass it via an
+# environment variable so it never gets committed to git:
+export TF_VAR_db_password="ChangeMeToAStrongPassword123!"
 
 # Initialize Terraform
 terraform init
@@ -177,6 +188,7 @@ terraform apply
 After apply completes, note the outputs:
 ```bash
 terraform output
+# db_address / db_port give you the RDS endpoint the app will connect to
 ```
 
 ---
@@ -303,7 +315,9 @@ aws ecr list-images --repository-name shopverse-helmchart --region $REGION
 ### Step 9: Install EKS Add-ons
 
 ```bash
-# Install EBS CSI Driver (required for MySQL PVC)
+# EBS CSI Driver: only needed if you add other PersistentVolumeClaims later.
+# The database no longer runs in-cluster (it's RDS), so it's optional now,
+# but the Terraform EKS module still installs it by default as a convenience.
 # If using Terraform modules, EBS CSI is already installed as an addon.
 # If not, install manually:
 eksctl utils associate-iam-oidc-provider --cluster shopverse-cluster --region us-east-1 --approve
@@ -340,30 +354,34 @@ ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
 REGION=us-east-1
 ECR_URI=${ACCOUNT_ID}.dkr.ecr.${REGION}.amazonaws.com
 
+# Get the RDS endpoint from Terraform output
+RDS_HOST=$(cd terraform && terraform output -raw db_address)
+RDS_PORT=$(cd terraform && terraform output -raw db_port)
+
 helm upgrade --install shopverse ./helm/shopverse \
   --set frontend.image=${ECR_URI}/shopverse-frontend:v1 \
   --set backend.image=${ECR_URI}/shopverse-backend:v1 \
-  --set mysql.rootPassword=YourRootPassword123 \
-  --set mysql.password=YourAppPassword123 \
+  --set postgres.host=${RDS_HOST} \
+  --set postgres.port=${RDS_PORT} \
+  --set-string postgres.password=YourAppPassword123 \
   --set jwtSecret=YourJwtSecretKey123 \
   --namespace shopverse \
   --create-namespace \
   --wait --timeout 600s
 ```
 
+> `postgres.password` must match the `db_password` used when running `terraform apply` for the RDS master password (or the app-level password, if you later split master vs. app credentials).
+
 ---
 
 ### Step 11: Verify Deployment
 
 ```bash
-# Check all pods are running (should see 5 pods: 2 frontend, 2 backend, 1 mysql)
+# Check all pods are running (should see 4 pods: 2 frontend, 2 backend — no DB pod, it's RDS)
 kubectl get pods -n shopverse
 
 # Check services (frontend NodePort:30080, backend NodePort:30081)
 kubectl get svc -n shopverse
-
-# Check persistent volume claims (MySQL storage)
-kubectl get pvc -n shopverse
 
 # Check all resources at once
 kubectl get all -n shopverse
@@ -371,7 +389,13 @@ kubectl get all -n shopverse
 # Check pod logs if needed
 kubectl logs -n shopverse -l component=backend --tail=50
 kubectl logs -n shopverse -l component=frontend --tail=50
-kubectl logs -n shopverse shopverse-mysql-0 --tail=50
+
+# Check RDS instance status directly
+aws rds describe-db-instances \
+  --db-instance-identifier shopverse-postgres \
+  --region us-east-1 \
+  --query 'DBInstances[0].[DBInstanceStatus,Endpoint.Address,Endpoint.Port]' \
+  --output table
 ```
 
 ---
@@ -428,7 +452,7 @@ kubectl get svc -n shopverse
 
 ### Understanding the Database
 
-ShopVerse uses MySQL 8.0 running as a Kubernetes StatefulSet. The database contains these tables:
+ShopVerse uses **AWS RDS Postgres** (`db.t3.micro`). It's not reachable from your laptop directly (it lives in a private subnet) — query it either from the jump server EC2 instance, or via `kubectl exec` into a running backend pod (since the backend pod's network path to RDS is already open).
 
 | Table | Description |
 |-------|-------------|
@@ -440,71 +464,71 @@ ShopVerse uses MySQL 8.0 running as a Kubernetes StatefulSet. The database conta
 
 ### Step 1: Get the Database Password
 
-The MySQL password is stored as a Kubernetes secret (base64 encoded):
+The Postgres password is stored as a Kubernetes secret (base64 encoded):
 
 ```bash
-# Decode the database password from the Kubernetes secret
 DB_PASSWORD=$(kubectl get secret -n shopverse shopverse-secret \
   -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)
 
-# Verify you got the password (optional)
 echo $DB_PASSWORD
 ```
 
-**How this works:**
-- `kubectl get secret` fetches the Kubernetes secret object
-- `-o jsonpath='{.data.DB_PASSWORD}'` extracts just the password field
-- `| base64 -d` decodes it from base64 (Kubernetes stores secrets in base64)
-
-### Step 2: Connect to MySQL Shell
+### Step 2: Get the RDS Endpoint
 
 ```bash
-# Open an interactive MySQL shell inside the MySQL pod
-kubectl exec -it -n shopverse shopverse-mysql-0 -- mysql -u shopverse -p"$DB_PASSWORD" shopverse
+DB_HOST=$(cd terraform && terraform output -raw db_address)
+echo $DB_HOST
 ```
 
-**How this works:**
-- `kubectl exec -it` runs an interactive command inside a pod
-- `-n shopverse` specifies the namespace
-- `shopverse-mysql-0` is the MySQL pod name (StatefulSet pod naming: `<name>-0`)
-- `-- mysql -u shopverse -p"$DB_PASSWORD" shopverse` runs the MySQL client
-  - `-u shopverse` = database username
-  - `-p"$DB_PASSWORD"` = password (no space between `-p` and the password)
-  - `shopverse` (at end) = database name to connect to
+### Step 3: Connect via `psql`
 
-### Step 3: Run Queries Inside MySQL Shell
+**Option A — from the jump server** (has network access into the VPC's private subnets):
 
-Once inside the MySQL shell (you'll see `mysql>` prompt):
+1. Connect to the jump server via **EC2 Instance Connect** (see "Connect to Jump Server" below).
+2. Install the Postgres client if it's not already there: `sudo dnf install -y postgresql16` (Amazon Linux) or `sudo apt-get install -y postgresql-client` (Ubuntu).
+3. Connect:
+```bash
+psql "host=<DB_HOST> port=5432 dbname=shopverse user=shopverse password=<DB_PASSWORD> sslmode=require"
+```
+
+**Option B — from inside a running backend pod** (no extra tooling to install, since the pod already has network access):
+```bash
+kubectl exec -it -n shopverse deployment/shopverse-backend -- sh
+# then, if psql isn't in the image, fall back to querying through the Go app's /health
+# or add a one-off debug pod with the postgres image instead:
+kubectl run -it --rm psql-debug -n shopverse --image=postgres:16 --restart=Never -- \
+  psql "host=$DB_HOST port=5432 dbname=shopverse user=shopverse password=$DB_PASSWORD sslmode=require"
+```
+
+### Step 4: Run Queries
+
+Once connected (you'll see a `shopverse=>` prompt):
 
 #### View all tables
 ```sql
-SHOW TABLES;
+\dt
 ```
-This shows all 5 tables: `users`, `products`, `orders`, `order_items`, `cart_items`.
 
 #### View registered users
 ```sql
 SELECT id, name, email, created_at FROM users;
 ```
-Shows all users who registered through the app. Passwords are hashed with bcrypt so they are not shown here.
 
 #### View all products
 ```sql
 SELECT id, name, category, price, original_price, rating, badge FROM products;
 ```
-Lists all 28 seeded products with their category, pricing, rating, and badge info.
 
 #### View products grouped by category
 ```sql
 SELECT category, COUNT(*) AS total_products,
-       ROUND(AVG(price), 2) AS avg_price,
-       ROUND(MIN(price), 2) AS min_price,
-       ROUND(MAX(price), 2) AS max_price
+       ROUND(AVG(price)::numeric, 2) AS avg_price,
+       ROUND(MIN(price)::numeric, 2) AS min_price,
+       ROUND(MAX(price)::numeric, 2) AS max_price
 FROM products
 GROUP BY category
 ORDER BY total_products DESC;
 ```
-Shows product count and price stats per category (Electronics, Clothing, Accessories, Food & Drinks, Sports, Home & Living).
 
 #### View all orders with customer info
 ```sql
@@ -519,10 +543,6 @@ FROM orders o
 JOIN users u ON o.user_id = u.id
 ORDER BY o.created_at DESC;
 ```
-**How this works:**
-- `JOIN users u ON o.user_id = u.id` links each order to the user who placed it
-- `ORDER BY o.created_at DESC` shows newest orders first
-- `o.status` shows the order status (e.g., pending, completed)
 
 #### View order items with product details
 ```sql
@@ -537,10 +557,6 @@ FROM order_items oi
 JOIN products p ON oi.product_id = p.id
 ORDER BY oi.order_id, p.name;
 ```
-**How this works:**
-- `order_items` stores what was purchased in each order
-- `JOIN products p ON oi.product_id = p.id` links item to its product details
-- `(oi.quantity * oi.price)` calculates the subtotal for each line item
 
 #### View complete order breakdown (orders + items together)
 ```sql
@@ -560,7 +576,6 @@ JOIN order_items oi ON oi.order_id = o.id
 JOIN products p ON oi.product_id = p.id
 ORDER BY o.id, p.name;
 ```
-This is the most complete view - joins 4 tables to show who ordered what, quantities, prices, and order status.
 
 #### View current cart items
 ```sql
@@ -577,7 +592,6 @@ JOIN users u ON ci.user_id = u.id
 JOIN products p ON ci.product_id = p.id
 ORDER BY u.name;
 ```
-Shows items currently in users' shopping carts (items that haven't been ordered yet).
 
 #### Dashboard summary
 ```sql
@@ -588,61 +602,31 @@ SELECT
     (SELECT COALESCE(SUM(total_amount), 0) FROM orders) AS total_revenue,
     (SELECT COUNT(*) FROM cart_items) AS items_in_carts;
 ```
-A quick overview of the entire application's data - total users, products, orders, revenue, and active cart items.
 
-#### Exit MySQL shell
+#### Exit `psql`
 ```sql
-EXIT;
+\q
 ```
 
-### Quick One-Liner Queries (Without Entering MySQL Shell)
-
-These run a query directly from your terminal without opening the interactive MySQL shell:
+### Quick One-Liner Queries (Without an Interactive Session)
 
 ```bash
-# First, get the DB password
-DB_PASSWORD=$(kubectl get secret -n shopverse shopverse-secret \
-  -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)
-```
+DB_HOST=$(cd terraform && terraform output -raw db_address)
+DB_PASSWORD=$(kubectl get secret -n shopverse shopverse-secret -o jsonpath='{.data.DB_PASSWORD}' | base64 -d)
 
-```bash
 # List all registered users
-kubectl exec -n shopverse shopverse-mysql-0 -- \
-  mysql -u shopverse -p"$DB_PASSWORD" shopverse \
-  -e "SELECT id, name, email, created_at FROM users;"
-```
+kubectl run -it --rm psql-debug -n shopverse --image=postgres:16 --restart=Never -- \
+  psql "host=$DB_HOST port=5432 dbname=shopverse user=shopverse password=$DB_PASSWORD sslmode=require" \
+  -c "SELECT id, name, email, created_at FROM users;"
 
-```bash
-# List all orders with customer names
-kubectl exec -n shopverse shopverse-mysql-0 -- \
-  mysql -u shopverse -p"$DB_PASSWORD" shopverse \
-  -e "SELECT o.id, u.name, o.total_amount, o.status, o.created_at FROM orders o JOIN users u ON o.user_id = u.id;"
-```
-
-```bash
-# List order items with product details
-kubectl exec -n shopverse shopverse-mysql-0 -- \
-  mysql -u shopverse -p"$DB_PASSWORD" shopverse \
-  -e "SELECT oi.order_id, p.name, oi.quantity, oi.price, (oi.quantity * oi.price) AS subtotal FROM order_items oi JOIN products p ON oi.product_id = p.id ORDER BY oi.order_id;"
-```
-
-```bash
-# Count products per category
-kubectl exec -n shopverse shopverse-mysql-0 -- \
-  mysql -u shopverse -p"$DB_PASSWORD" shopverse \
-  -e "SELECT category, COUNT(*) AS count FROM products GROUP BY category ORDER BY count DESC;"
-```
-
-```bash
 # Quick dashboard summary
-kubectl exec -n shopverse shopverse-mysql-0 -- \
-  mysql -u shopverse -p"$DB_PASSWORD" shopverse \
-  -e "SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM products) AS products, (SELECT COUNT(*) FROM orders) AS orders, (SELECT COALESCE(SUM(total_amount),0) FROM orders) AS revenue;"
+kubectl run -it --rm psql-debug -n shopverse --image=postgres:16 --restart=Never -- \
+  psql "host=$DB_HOST port=5432 dbname=shopverse user=shopverse password=$DB_PASSWORD sslmode=require" \
+  -c "SELECT (SELECT COUNT(*) FROM users) AS users, (SELECT COUNT(*) FROM products) AS products, (SELECT COUNT(*) FROM orders) AS orders, (SELECT COALESCE(SUM(total_amount),0) FROM orders) AS revenue;"
 ```
 
-**How the `-e` flag works:**
-- `-e "SQL QUERY"` executes the query and exits immediately (no interactive shell)
-- Useful for quick checks or scripting
+**How the `-c` flag works:**
+- `-c "SQL QUERY"` executes the query and exits immediately (no interactive shell) — same idea as MySQL's `-e` flag.
 
 ---
 
@@ -659,9 +643,8 @@ Go to your GitHub repo > Settings > Secrets and variables > Actions, and add:
 | `AWS_REGION`            | e.g., `us-east-1`                                    |
 | `ECR_REGISTRY`          | e.g., `123456789.dkr.ecr.us-east-1.amazonaws.com`    |
 | `EKS_CLUSTER_NAME`      | e.g., `shopverse-cluster`                            |
-| `TF_STATE_BUCKET`       | Root@1234                                            |
-| `MYSQL_ROOT_PASSWORD`   | MySQL root password                                  |
-| `MYSQL_PASSWORD`        | App@1234                                             |
+| `TF_STATE_BUCKET`       | Name of the S3 bucket holding Terraform state        |
+| `DB_PASSWORD`           | RDS master/app Postgres password (used by both Terraform and Helm) |
 | `JWT_SECRET`            | shopverse-secret-key-2024                            |
 
 ### Pipeline Stages
@@ -737,29 +720,27 @@ shopverse/
 │   │   └── middleware/        # JWT auth middleware
 │   └── Dockerfile             # Multi-stage: Go -> Distroless
 ├── helm/shopverse/            # Helm chart
-│   ├── templates/             # K8s manifests (10 YAML files)
-│   │   ├── secret.yaml        # DB passwords, JWT secret
-│   │   ├── configmap.yaml     # DB host, port, name config
-│   │   ├── mysql-pvc.yaml     # 5Gi persistent volume claim
-│   │   ├── mysql-statefulset.yaml  # MySQL 8.0 pod
-│   │   ├── mysql-service.yaml      # MySQL ClusterIP service
+│   ├── templates/             # K8s manifests
+│   │   ├── secret.yaml        # DB password, JWT secret
+│   │   ├── configmap.yaml     # DB host, port, name, sslmode config (points at RDS)
 │   │   ├── backend-deployment.yaml # Go API (2 replicas)
 │   │   ├── backend-service.yaml    # NodePort 30081
 │   │   ├── frontend-deployment.yaml # React+Nginx (2 replicas)
 │   │   ├── frontend-service.yaml    # NodePort 30080
 │   │   └── ingress.yaml            # ALB ingress
-│   ├── values.yaml            # Configurable values
+│   ├── values.yaml            # Configurable values (postgres.* points at RDS)
 │   └── Chart.yaml             # Chart metadata
 ├── terraform/                 # Infrastructure as Code (Modules)
 │   ├── main.tf                # Root - wires all modules
 │   ├── variables.tf           # Root input variables
-│   ├── outputs.tf             # Root outputs
+│   ├── outputs.tf             # Root outputs (incl. db_address/db_port)
 │   ├── versions.tf            # Provider versions + S3 backend
 │   ├── terraform.tfvars.example
 │   ├── README.md              # Detailed Terraform guide
 │   └── modules/
 │       ├── vpc/               # VPC, subnets, IGW, NAT, routes
 │       ├── eks/               # EKS cluster, node group, OIDC, addons
+│       ├── rds/                # RDS Postgres instance (db.t3.micro), subnet group, SG
 │       └── ec2/               # Jump server (Ubuntu 22.04)
 ├── .github/workflows/         # CI/CD pipeline
 │   └── deploy.yml             # 4-stage: test -> scan -> build -> deploy
@@ -772,8 +753,9 @@ shopverse/
 ### Pods stuck in Pending
 ```bash
 kubectl describe pod <pod-name> -n shopverse
-kubectl get pvc -n shopverse
-# Common cause: EBS CSI driver not installed (PVC can't bind)
+# The database no longer runs in-cluster (RDS), so this is now almost always
+# a scheduling/resource issue on the frontend or backend deployments, not a
+# PVC-binding issue.
 ```
 
 ### Frontend can't reach backend (502/504)
@@ -783,11 +765,17 @@ kubectl logs -n shopverse -l component=backend
 # Verify backend pods are running and healthy
 ```
 
-### MySQL connection refused
+### Backend can't connect to the database
 ```bash
-kubectl get pods -n shopverse -l component=mysql
-kubectl logs -n shopverse shopverse-mysql-0
-# Check if MySQL is still initializing
+kubectl logs -n shopverse -l component=backend
+# Common causes:
+# 1. RDS security group doesn't allow the EKS node SG on port 5432
+#    -> check terraform/modules/rds/main.tf's aws_security_group_rule
+# 2. Wrong DB_HOST/DB_PORT in the ConfigMap
+#    -> kubectl get configmap shopverse-config -n shopverse -o yaml
+# 3. RDS instance still provisioning (can take 5-10 min on first apply)
+aws rds describe-db-instances --db-instance-identifier shopverse-postgres --region us-east-1 \
+  --query 'DBInstances[0].DBInstanceStatus'
 ```
 
 ### Can't access NodePort from browser
@@ -807,312 +795,13 @@ helm upgrade shopverse ./helm/shopverse \
   --reuse-values -n shopverse
 ```
 
+## CI/CD Pipeline File
 
+The full, current CI/CD pipeline lives at [`.github/workflows/deploy.yaml`](.github/workflows/deploy.yaml) — that file is the single source of truth (this README no longer duplicates it inline, to avoid the two drifting out of sync). Key points about the current version:
 
-
-**pipeline**
-
-```
-name: ShopVerse CI/CD
-
-on:
-  push:
-    branches: [main]
-
-env:
-  AWS_REGION: ${{ secrets.AWS_REGION }}
-  ECR_REGISTRY: ${{ secrets.ECR_REGISTRY }}
-  EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
-  HELM_CHART_NAME: shopverse
-  TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
-
-jobs:
-  # ──────────────────────────────────────────────
-  # Stage 1: Test
-  # ──────────────────────────────────────────────
-  test:
-    name: Test
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
-      - name: Update go.sum
-        working-directory: ./backend
-        run: go mod tidy
-
-      - name: Run Go tests
-        working-directory: ./backend
-        run: go test ./...
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: "18"
-
-      - name: Install frontend dependencies
-        working-directory: ./frontend
-        run: npm install
-
-      - name: Run frontend lint
-        working-directory: ./frontend
-        run: npx eslint . --ext js,jsx --report-unused-disable-directives --max-warnings 0 --config .eslintrc.cjs
-
-  # ──────────────────────────────────────────────
-  # Stage 2: Security Scan
-  # ──────────────────────────────────────────────
-  security-scan:
-    name: Security Scan
-    runs-on: ubuntu-latest
-    needs: test
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build frontend image
-        run: docker build -t shopverse-frontend:scan ./frontend
-
-      - name: Build backend image
-        run: docker build -t shopverse-backend:scan ./backend
-
-      - name: Install Trivy
-        run: |
-          sudo apt-get install -y wget apt-transport-https gnupg
-          wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | gpg --dearmor | sudo tee /usr/share/keyrings/trivy.gpg > /dev/null
-          echo "deb [signed-by=/usr/share/keyrings/trivy.gpg] https://aquasecurity.github.io/trivy-repo/deb generic main" | sudo tee /etc/apt/sources.list.d/trivy.list
-          sudo apt-get update -q
-          sudo apt-get install -y trivy
-
-      - name: Run Trivy scan on frontend
-        run: |
-          trivy image --exit-code 1 --severity CRITICAL --ignore-unfixed --format table shopverse-frontend:scan
-
-      - name: Run Trivy scan on backend
-        run: |
-          trivy image --exit-code 1 --severity CRITICAL --ignore-unfixed --format table shopverse-backend:scan
-
-  # ──────────────────────────────────────────────
-  # Stage 3: Build, Tag & Push Images + Helm Chart
-  # ──────────────────────────────────────────────
-  build-and-push:
-    name: Build, Tag & Push
-    runs-on: ubuntu-latest
-    needs: security-scan
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Login to Amazon ECR
-        id: login-ecr
-        uses: aws-actions/amazon-ecr-login@v2
-
-      - name: Ensure ECR repositories exist
-        run: |
-          for repo in shopverse-frontend shopverse-backend shopverse-helmchart/shopverse; do
-            aws ecr describe-repositories --repository-names $repo --region ${{ env.AWS_REGION }} 2>/dev/null || \
-            aws ecr create-repository --repository-name $repo --region ${{ env.AWS_REGION }}
-          done
-
-      - name: Build and tag frontend image
-        run: |
-          docker build -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
-                        -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest \
-                        ./frontend
-
-      - name: Build and tag backend image
-        run: |
-          docker build -t ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
-                        -t ${{ env.ECR_REGISTRY }}/shopverse-backend:latest \
-                        ./backend
-
-      - name: Push frontend image
-        run: |
-          docker push ${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}
-          docker push ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest
-
-      - name: Push backend image
-        run: |
-          docker push ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}
-          docker push ${{ env.ECR_REGISTRY }}/shopverse-backend:latest
-
-      - name: Update Helm values.yaml with new image tags
-        run: |
-          FRONTEND_IMG="${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}"
-          BACKEND_IMG="${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}"
-          sed -i "s|image:.*# frontend-image|image: ${FRONTEND_IMG}  # frontend-image|" helm/shopverse/values.yaml
-          sed -i "s|image:.*# backend-image|image: ${BACKEND_IMG}  # backend-image|" helm/shopverse/values.yaml
-          echo "Updated values.yaml:"
-          cat helm/shopverse/values.yaml
-
-      - name: Install Helm
-        uses: azure/setup-helm@v3
-
-      - name: Login Helm to ECR
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
-            helm registry login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
-
-      - name: Package Helm chart
-        run: |
-          helm package ./helm/shopverse \
-            --version 1.0.0-${{ github.sha }} \
-            --app-version ${{ github.sha }}
-
-      - name: Push Helm chart to ECR
-        run: |
-          helm push shopverse-1.0.0-${{ github.sha }}.tgz \
-            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart
-
-  # ──────────────────────────────────────────────
-  # Stage 4: Provision Infra (if needed) + Deploy
-  # ──────────────────────────────────────────────
-  deploy:
-    name: Provision Infra & Deploy
-    runs-on: ubuntu-latest
-    needs: build-and-push
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Configure AWS credentials
-        uses: aws-actions/configure-aws-credentials@v4
-        with:
-          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
-          aws-region: ${{ env.AWS_REGION }}
-
-      - name: Check if EKS cluster exists
-        id: check-cluster
-        run: |
-          if aws eks describe-cluster --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }} > /dev/null 2>&1; then
-            echo "cluster_exists=true" >> "$GITHUB_OUTPUT"
-            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' found."
-          else
-            echo "cluster_exists=false" >> "$GITHUB_OUTPUT"
-            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' NOT found. Will provision with Terraform."
-          fi
-
-      - name: Setup Terraform
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: "1.7.0"
-
-      - name: Terraform Init
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        working-directory: ./terraform
-        run: |
-          terraform init \
-            -backend-config="bucket=${{ env.TF_STATE_BUCKET }}" \
-            -backend-config="key=eks/terraform.tfstate" \
-            -backend-config="region=${{ env.AWS_REGION }}"
-
-      - name: Terraform Plan
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        working-directory: ./terraform
-        run: |
-          terraform plan \
-            -var="aws_region=${{ env.AWS_REGION }}" \
-            -var="cluster_name=${{ env.EKS_CLUSTER_NAME }}" \
-            -var="project_name=shopverse" \
-            -var="create_jump_server=false" \
-            -out=tfplan
-
-      - name: Terraform Apply
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        working-directory: ./terraform
-        run: terraform apply -auto-approve tfplan
-
-      - name: Wait for EKS cluster to be active
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        run: |
-          echo "Waiting for EKS cluster to become ACTIVE..."
-          aws eks wait cluster-active --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
-          echo "Waiting for node group to become ACTIVE..."
-          aws eks wait nodegroup-active \
-            --cluster-name ${{ env.EKS_CLUSTER_NAME }} \
-            --nodegroup-name ${{ env.EKS_CLUSTER_NAME }}-nodes \
-            --region ${{ env.AWS_REGION }}
-          echo "Cluster and nodes are ready."
-
-      - name: Install AWS Load Balancer Controller
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
-        run: |
-          aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
-          helm repo add eks https://aws.github.io/eks-charts
-          helm repo update
-          ALB_ROLE_ARN=$(cd terraform && terraform output -raw alb_controller_role_arn)
-          helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
-            -n kube-system \
-            --set clusterName=${{ env.EKS_CLUSTER_NAME }} \
-            --set serviceAccount.create=true \
-            --set serviceAccount.name=aws-load-balancer-controller \
-            --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=$ALB_ROLE_ARN
-
-      - name: Install kubectl
-        uses: azure/setup-kubectl@v3
-
-      - name: Install Helm
-        uses: azure/setup-helm@v3
-
-      - name: Update kubeconfig
-        run: aws eks update-kubeconfig --name ${{ env.EKS_CLUSTER_NAME }} --region ${{ env.AWS_REGION }}
-
-      - name: Login to ECR for Helm
-        run: |
-          aws ecr get-login-password --region ${{ env.AWS_REGION }} | \
-            helm registry login --username AWS --password-stdin ${{ env.ECR_REGISTRY }}
-
-      - name: Deploy Helm chart
-        run: |
-          helm upgrade --install shopverse \
-            oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse \
-            --version 1.0.0-${{ github.sha }} \
-            --set frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
-            --set backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
-            --set mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }} \
-            --set mysql.password=${{ secrets.MYSQL_PASSWORD }} \
-            --set jwtSecret=${{ secrets.JWT_SECRET }} \
-            --namespace shopverse \
-            --create-namespace \
-            --wait --timeout 300s \
-            --cleanup-on-fail
-
-      - name: Verify deployment
-        run: |
-          echo ""
-          echo "--- Nodes ---"
-          kubectl get nodes -o wide
-          echo ""
-          echo "--- Pods ---"
-          kubectl get pods -n shopverse
-          echo ""
-          echo "--- StatefulSets ---"
-          kubectl get sts -n shopverse
-          echo ""
-          echo "--- Services ---"
-          kubectl get svc -n shopverse
-          echo ""
-          echo "--- PV & PVC ---"
-          kubectl get pv,pvc -n shopverse
-          echo ""
-          echo "--- Secrets ---"
-          kubectl get secrets -n shopverse
-          echo ""
-          echo "--- Ingress ---"
-          kubectl get ingress -n shopverse 2>/dev/null || echo "No ingress configured"
-
-
-
-```
+- Terraform now runs on **every** deploy (not just on first EKS cluster creation), since the RDS endpoint needs to be read via `terraform output` on each run — `terraform apply` is idempotent, so this is a no-op once infrastructure exists.
+- The `postgres.host` / `postgres.port` Helm values are populated from Terraform's `db_address` / `db_port` outputs at deploy time, rather than hardcoded.
+- `MYSQL_ROOT_PASSWORD` / `MYSQL_PASSWORD` GitHub secrets are replaced by a single `DB_PASSWORD` secret (used both as the RDS master password via `TF_VAR_db_password`, and as the app's DB password in the Helm release).
 
 ---
 
