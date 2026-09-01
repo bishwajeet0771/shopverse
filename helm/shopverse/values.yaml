@@ -10,7 +10,6 @@ frontend:
   ingressName: shopverse-frontend-ingress
   ingressHost: ""
 
-
 # ──────────────────────────────────────
 # Backend
 # ──────────────────────────────────────
@@ -23,18 +22,20 @@ backend:
   ingressName: shopverse-backend-ingress
   ingressHost: ""
 
-  # Kubernetes ServiceAccount used by the backend pod.
-  #
-  # This ServiceAccount must be connected to an AWS IAM role
-  # that has permission to read the PostgreSQL secret from
-  # AWS Secrets Manager.
-  serviceAccountName: shopverse-backend
-
-  # AWS Secrets Manager secret containing the RDS PostgreSQL
-  # connection information.
-  dbSecretName: Latest-Prod-ShopVerse-Postgres-Credentials
-  databaseName: shopverse
-
+# ──────────────────────────────────────
+# Postgres (AWS RDS — db.t3.micro)
+# No StatefulSet/PVC anymore: this just points the
+# app at the externally-provisioned RDS instance.
+# host/port are normally injected at deploy time via
+# --set from the Terraform outputs (db_address/db_port).
+# ──────────────────────────────────────
+postgres:
+  host: ""          # RDS endpoint, e.g. shopverse-postgres.xxxx.us-east-1.rds.amazonaws.com
+  port: "5432"
+  database: shopverse
+  user: shopverse
+  password: ""       # injected via --set-string at deploy time, never committed
+  sslmode: require
 
 # ──────────────────────────────────────
 # Shared
@@ -44,12 +45,4 @@ ingress:
   ingressClassName: traefik
   annotations: {}
 
-
-# ──────────────────────────────────────
-# JWT
-# ──────────────────────────────────────
-#
-# Keep this empty in values.yaml.
-# Supply the actual JWT secret during Helm deployment.
-#
 jwtSecret: ""
