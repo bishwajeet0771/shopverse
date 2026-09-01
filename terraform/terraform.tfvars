@@ -25,3 +25,13 @@ node_max_size      = 4
 create_jump_server        = true
 jump_server_instance_type = "c7i-flex.large"
 #
+
+# ──────────────────────────────────────────────
+# RDS (Postgres)
+# db_password is intentionally not set here — pass via
+# TF_VAR_db_password or CI secret, never commit it.
+# ──────────────────────────────────────────────
+db_name           = "shopverse"
+db_username       = "shopverse"
+db_instance_class = "db.t3.micro"
+db_multi_az       = false
