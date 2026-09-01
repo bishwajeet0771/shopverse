@@ -17,31 +17,24 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
 
   backend:
-    build:
-      context: ./backend
+    build: ./backend
     container_name: shopverse-backend
     ports:
       - "8080:8080"
     environment:
-      # Local PostgreSQL connection
       DB_HOST: postgres
       DB_PORT: "5432"
       DB_NAME: shopverse
       DB_USER: shopverse
       DB_PASSWORD: shopverse123
       DB_SSLMODE: disable
-
-      # Application configuration
       JWT_SECRET: local-dev-jwt-secret-key
       FRONTEND_ORIGIN: http://localhost:3000
-
     depends_on:
       postgres:
         condition: service_healthy
-
     restart: unless-stopped
 
   frontend:
