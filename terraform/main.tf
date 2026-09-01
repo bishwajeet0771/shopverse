@@ -37,104 +37,26 @@ module "eks" {
 }
 
 # ──────────────────────────────────────────────
-# RDS PostgreSQL Module
+# RDS Module (Postgres — replaces in-cluster MySQL StatefulSet)
 # ──────────────────────────────────────────────
 module "rds" {
   source = "./modules/rds"
 
-  name = "${var.project_name}-postgres"
+  project_name        = var.project_name
+  vpc_id              = module.vpc.vpc_id
+  private_subnet_ids  = module.vpc.private_subnet_ids
 
-  vpc_id = module.vpc.vpc_id
+  # Only the EKS node/cluster security group may reach Postgres
+  allowed_security_group_ids = [module.eks.node_security_group_id]
 
-  private_subnet_ids = module.vpc.private_subnet_ids
-
-  # PostgreSQL access from EKS.
-  #
-  # IMPORTANT:
-  # Verify that this is the security group used by the
-  # backend workload/network path. If the backend traffic
-  # originates from the EKS node security group, use that
-  # security group instead.
-  allowed_security_group_ids = [
-    module.eks.custom_cluster_security_group_id
-  ]
-
-  database_name = "shopverse"
-  username      = "shopverse"
-
-  engine_version = "16"
-
-  instance_class = "db.t3.micro"
-
-  allocated_storage     = 20
-  max_allocated_storage = 20
-
-  backup_retention_period = 0
-
-  multi_az = false
-
-  deletion_protection = true
-
-  skip_final_snapshot = false
+  db_name        = var.db_name
+  db_username    = var.db_username
+  db_password    = var.db_password
+  instance_class = var.db_instance_class
+  multi_az       = var.db_multi_az
+  deletion_protection = var.db_deletion_protection
 
   tags = local.common_tags
-}
-
-# ──────────────────────────────────────────────
-# IAM Role for ShopVerse Backend
-# ──────────────────────────────────────────────
-resource "aws_iam_role" "shopverse_backend" {
-  name = "${var.cluster_name}-shopverse-backend"
-
-  assume_role_policy = jsonencode({
-    Version = "2012-10-17"
-
-    Statement = [
-      {
-        Effect = "Allow"
-
-        Principal = {
-          Federated = module.eks.oidc_provider_arn
-        }
-
-        Action = "sts:AssumeRoleWithWebIdentity"
-
-        Condition = {
-          StringEquals = {
-            "${replace(module.eks.oidc_provider_url, "https://", "")}:sub" = "system:serviceaccount:shopverse:shopverse-backend"
-            "${replace(module.eks.oidc_provider_url, "https://", "")}:aud" = "sts.amazonaws.com"
-          }
-        }
-      }
-    ]
-  })
-
-  tags = local.common_tags
-}
-
-# ──────────────────────────────────────────────
-# Allow Backend to Read RDS Credentials
-# ──────────────────────────────────────────────
-resource "aws_iam_role_policy" "shopverse_backend_secrets" {
-  name = "${var.cluster_name}-shopverse-backend-secrets"
-
-  role = aws_iam_role.shopverse_backend.id
-
-  policy = jsonencode({
-    Version = "2012-10-17"
-
-    Statement = [
-      {
-        Effect = "Allow"
-
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-
-        Resource = module.rds.master_user_secret_arn
-      }
-    ]
-  })
 }
 
 # ──────────────────────────────────────────────
@@ -142,8 +64,7 @@ resource "aws_iam_role_policy" "shopverse_backend_secrets" {
 # ──────────────────────────────────────────────
 module "jump_server" {
   source = "./modules/ec2"
-
-  count = var.create_jump_server ? 1 : 0
+  count  = var.create_jump_server ? 1 : 0
 
   name              = "${var.project_name}-jump-server"
   vpc_id            = module.vpc.vpc_id
