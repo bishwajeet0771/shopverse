@@ -1,13 +1,13 @@
 apiVersion: v1
 kind: ConfigMap
-
 metadata:
   name: shopverse-config
-
   labels:
     app: shopverse
-
 data:
-  DB_SECRET_NAME: {{ .Values.database.secretName | quote }}
-
+  DB_HOST: {{ .Values.postgres.host | quote }}
+  DB_PORT: {{ .Values.postgres.port | quote }}
+  DB_NAME: {{ .Values.postgres.database | quote }}
+  DB_USER: {{ .Values.postgres.user | quote }}
+  DB_SSLMODE: {{ .Values.postgres.sslmode | quote }}
   FRONTEND_ORIGIN: "*"
