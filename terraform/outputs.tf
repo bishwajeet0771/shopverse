@@ -56,6 +56,24 @@ output "ebs_csi_role_arn" {
 }
 
 # ──────────────────────────────────────────────
+# RDS Outputs
+# ──────────────────────────────────────────────
+output "db_endpoint" {
+  description = "RDS endpoint (host:port)"
+  value       = module.rds.db_endpoint
+}
+
+output "db_address" {
+  description = "RDS hostname only — feed this into Helm as postgres.host"
+  value       = module.rds.db_address
+}
+
+output "db_port" {
+  description = "RDS port"
+  value       = module.rds.db_port
+}
+
+# ──────────────────────────────────────────────
 # Jump Server Outputs
 # ──────────────────────────────────────────────
 output "jump_server_public_ip" {
@@ -79,25 +97,4 @@ output "jump_server_instance_id" {
 output "kubeconfig_command" {
   description = "Command to update kubeconfig"
   value       = "aws eks update-kubeconfig --name ${module.eks.cluster_name} --region ${var.aws_region}"
-}
-
-output "rds_endpoint" {
-  description = "RDS PostgreSQL endpoint"
-  value       = module.rds.db_endpoint
-}
-
-output "rds_port" {
-  description = "RDS PostgreSQL port"
-  value       = module.rds.db_port
-}
-
-output "rds_database_name" {
-  description = "RDS PostgreSQL database name"
-  value       = module.rds.db_name
-}
-
-output "rds_secret_arn" {
-  description = "RDS PostgreSQL master user secret ARN"
-  value       = module.rds.master_user_secret_arn
-  sensitive   = true
 }
