@@ -87,9 +87,21 @@ node_max_size      = 4
 # Jump Server
 create_jump_server        = true
 jump_server_instance_type = "t2.medium"
+
+# RDS (Postgres) — db_password intentionally omitted, see below
+db_name           = "shopverse"
+db_username       = "shopverse"
+db_instance_class = "db.t3.micro"
+db_multi_az       = false
 ```
 
 Set `create_jump_server = false` if you don't need a jump server.
+
+`db_password` is **not** set in `terraform.tfvars` on purpose — it's a sensitive value and shouldn't be committed. Pass it as an environment variable instead:
+
+```bash
+export TF_VAR_db_password="ChangeMeToAStrongPassword123!"
+```
 
 ## Step 4: Initialize Terraform
 
@@ -214,11 +226,15 @@ helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
   --set serviceAccount.annotations."eks\.amazonaws\.com/role-arn"=$ALB_ROLE_ARN
 
 # 5. Deploy with Helm
+RDS_HOST=$(terraform output -raw db_address)
+RDS_PORT=$(terraform output -raw db_port)
+
 helm upgrade --install shopverse ./helm/shopverse \
   --set frontend.image=${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/shopverse-frontend:v1 \
   --set backend.image=${ACCOUNT_ID}.dkr.ecr.us-east-1.amazonaws.com/shopverse-backend:v1 \
-  --set mysql.rootPassword=YourRootPassword123 \
-  --set mysql.password=YourAppPassword123 \
+  --set postgres.host=${RDS_HOST} \
+  --set postgres.port=${RDS_PORT} \
+  --set-string postgres.password=YourAppPassword123 \
   --set jwtSecret=YourJwtSecretKey123 \
   --namespace shopverse \
   --create-namespace \
@@ -246,9 +262,8 @@ terraform apply   # Apply changes
 To tear down everything:
 
 ```bash
-# First, delete Kubernetes resources (Helm release, PVCs, etc.)
+# First, delete Kubernetes resources (Helm release, etc.)
 helm uninstall shopverse -n shopverse
-kubectl delete pvc --all -n shopverse
 kubectl delete namespace shopverse
 
 # Then destroy Terraform-managed infrastructure
@@ -257,7 +272,9 @@ terraform destroy
 
 Type `yes` when prompted. This removes all AWS resources created by Terraform.
 
-> **Warning:** `terraform destroy` will delete the EKS cluster, VPC, jump server, and all associated resources. Make sure you have backed up any important data.
+> **Warning:** `terraform destroy` will delete the EKS cluster, VPC, RDS instance, jump server, and all associated resources. Make sure you have backed up any important data.
+>
+> The RDS module defaults `deletion_protection = true`, so `terraform destroy` will fail on the DB instance until you either set `deletion_protection = false` (in `terraform.tfvars` or via `-var`) or disable it manually first. This is intentional — it's a guardrail against accidentally destroying production data.
 
 ## Module Structure
 
@@ -277,6 +294,10 @@ terraform/
     │   ├── main.tf               # Cluster, node group, OIDC, ALB role, EBS CSI
     │   ├── variables.tf          # cluster config, node config
     │   └── outputs.tf            # endpoints, role ARNs, OIDC
+    ├── rds/
+    │   ├── main.tf               # Postgres instance (db.t3.micro), subnet group, SG
+    │   ├── variables.tf          # db_name, db_username, db_password, instance_class
+    │   └── outputs.tf            # db_address, db_port, db_endpoint
     └── ec2/
         ├── main.tf               # Ubuntu EC2, IAM role, security group
         ├── userdata.sh           # Bootstraps kubectl, helm, docker
