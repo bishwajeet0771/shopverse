@@ -241,6 +241,21 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      # ==========================================================
+      # Sanitize EKS_CLUSTER_NAME — strips any leading/trailing
+      # whitespace from the secret so a mistyped/pasted value can
+      # never cause `describe-cluster` to false-negative and
+      # trigger an unwanted terraform plan/apply against existing
+      # infra. Overrides the job's EKS_CLUSTER_NAME for all
+      # subsequent steps in this job.
+      # ==========================================================
+
+      - name: Sanitize cluster name
+        run: |
+          CLEAN_NAME=$(echo "${{ secrets.EKS_CLUSTER_NAME }}" | xargs)
+          echo "EKS_CLUSTER_NAME=$CLEAN_NAME" >> "$GITHUB_ENV"
+          echo "Using cluster name: [$CLEAN_NAME]"
+
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
@@ -304,9 +319,6 @@ jobs:
         working-directory: ./terraform
         run: terraform apply -auto-approve tfplan
 
-      # terraform output reads straight from state — no plan/apply
-      # needed, so this always works whether infra was just created
-      # or already existed.
       - name: Read RDS endpoint from Terraform outputs
         id: rds
         working-directory: ./terraform
