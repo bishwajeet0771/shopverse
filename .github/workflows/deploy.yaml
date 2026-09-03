@@ -10,6 +10,7 @@ env:
   EKS_CLUSTER_NAME: ${{ secrets.EKS_CLUSTER_NAME }}
   HELM_CHART_NAME: shopverse
   TF_STATE_BUCKET: ${{ secrets.TF_STATE_BUCKET }}
+  TF_VAR_db_password: ${{ secrets.DB_PASSWORD }}
 
 jobs:
 
@@ -33,15 +34,6 @@ jobs:
           go-version: "1.25"
           cache: true
           cache-dependency-path: backend/go.sum
-
-      - name: Upgrade vulnerable pgx dependency
-        working-directory: ./backend
-        run: |
-          go get github.com/jackc/pgx/v5@v5.9.0
-          go mod tidy
-
-          echo "Resolved pgx version:"
-          go list -m github.com/jackc/pgx/v5
 
       - name: Run Go tests
         working-directory: ./backend
@@ -84,29 +76,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # IMPORTANT:
-      # The dependency update done in the "test" job does NOT
-      # automatically carry over to this separate GitHub runner.
-      #
-      # Therefore we update pgx again before building the backend.
-      # ----------------------------------------------------------
-
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
-          go-version: "1.24"
+          go-version: "1.25"
           cache: true
           cache-dependency-path: backend/go.sum
-
-      - name: Upgrade vulnerable pgx dependency
-        working-directory: ./backend
-        run: |
-          go get github.com/jackc/pgx/v5@v5.9.0
-          go mod tidy
-
-          echo "Resolved pgx version:"
-          go list -m github.com/jackc/pgx/v5
 
       # ----------------------------------------------------------
       # Build images
@@ -350,17 +325,19 @@ jobs:
           fi
 
       # ==========================================================
-      # Terraform
+      # Terraform — now runs on every deploy, not just first creation.
+      # This is required so RDS (and any other infra change) stays in
+      # sync, and so its endpoint can be read via `terraform output`
+      # every run. `terraform apply` is idempotent: no-op if nothing
+      # changed.
       # ==========================================================
 
       - name: Setup Terraform
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.7.0"
 
       - name: Terraform Init
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
         run: |
           terraform init \
@@ -369,7 +346,6 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}"
 
       - name: Terraform Plan
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
         run: |
           terraform plan \
@@ -380,12 +356,18 @@ jobs:
             -out=tfplan
 
       - name: Terraform Apply
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
         run: |
           terraform apply \
             -auto-approve \
             tfplan
+
+      - name: Read RDS endpoint from Terraform outputs
+        id: rds
+        working-directory: ./terraform
+        run: |
+          echo "host=$(terraform output -raw db_address)" >> "$GITHUB_OUTPUT"
+          echo "port=$(terraform output -raw db_port)" >> "$GITHUB_OUTPUT"
 
       # ==========================================================
       # Wait for EKS
@@ -410,11 +392,11 @@ jobs:
           echo "Cluster and nodes are ready."
 
       # ==========================================================
-      # Install AWS Load Balancer Controller
+      # Install/upgrade AWS Load Balancer Controller
+      # (idempotent now — runs every deploy, not just first creation)
       # ==========================================================
 
-      - name: Install AWS Load Balancer Controller
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
+      - name: Install/upgrade AWS Load Balancer Controller
         run: |
 
           aws eks update-kubeconfig \
@@ -516,12 +498,18 @@ jobs:
           echo "Backend IAM role:"
           echo "$BACKEND_ROLE_ARN"
 
+          echo "RDS endpoint:"
+          echo "${{ steps.rds.outputs.host }}:${{ steps.rds.outputs.port }}"
+
           helm upgrade --install shopverse \
             oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse \
             --version 1.0.0-${{ github.sha }} \
             --set frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }} \
             --set backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
             --set backend.iamRoleArn="$BACKEND_ROLE_ARN" \
+            --set postgres.host="${{ steps.rds.outputs.host }}" \
+            --set postgres.port="${{ steps.rds.outputs.port }}" \
+            --set-string postgres.password="${{ secrets.DB_PASSWORD }}" \
             --set jwtSecret="${{ secrets.JWT_SECRET }}" \
             --namespace shopverse \
             --create-namespace \
@@ -581,10 +569,13 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "           PV & PVC"
+          echo "           RDS Instance Status"
           echo "========================================"
-          kubectl get pv,pvc \
-            -n shopverse
+          aws rds describe-db-instances \
+            --db-instance-identifier shopverse-postgres \
+            --region "${{ env.AWS_REGION }}" \
+            --query 'DBInstances[0].[DBInstanceStatus,Endpoint.Address,Endpoint.Port]' \
+            --output table
 
           echo ""
           echo "========================================"
