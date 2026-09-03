@@ -5,15 +5,15 @@ go 1.24
 require (
 	github.com/gofiber/fiber/v2 v2.52.11
 	github.com/golang-jwt/jwt/v5 v5.2.0
-	golang.org/x/crypto v0.31.0
+	golang.org/x/crypto v0.55.0
 	gorm.io/driver/postgres v1.5.11
 	gorm.io/gorm v1.25.5
 )
 
 require (
 	github.com/andybalholm/brotli v1.0.5 // indirect
-	github.com/go-sql-driver/mysql v1.7.0 // indirect
 	github.com/google/uuid v1.5.0 // indirect
+	github.com/jackc/pgx/v5 v5.9.0 // indirect
 	github.com/jinzhu/inflection v1.0.0 // indirect
 	github.com/jinzhu/now v1.1.5 // indirect
 	github.com/klauspost/compress v1.17.0 // indirect
