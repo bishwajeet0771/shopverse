@@ -1,4 +1,34 @@
 # ──────────────────────────────────────────────
+# ShopVerse Backend IAM Role (IRSA)
+# Used by the backend pod's Kubernetes service account
+# (namespace: shopverse, name: shopverse-backend) for any
+# AWS API calls made from the app (e.g. future Secrets
+# Manager access for the RDS password).
+# ──────────────────────────────────────────────
+resource "aws_iam_role" "backend" {
+  name = "${var.cluster_name}-shopverse-backend"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = {
+        Federated = aws_iam_openid_connect_provider.eks.arn
+      }
+      Action = "sts:AssumeRoleWithWebIdentity"
+      Condition = {
+        StringEquals = {
+          "${replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")}:sub" = "system:serviceaccount:shopverse:shopverse-backend"
+          "${replace(aws_eks_cluster.this.identity[0].oidc[0].issuer, "https://", "")}:aud" = "sts.amazonaws.com"
+        }
+      }
+    }]
+  })
+
+  tags = var.tags
+}
+
+# ──────────────────────────────────────────────
 # EKS Cluster IAM Role
 # ──────────────────────────────────────────────
 resource "aws_iam_role" "cluster" {

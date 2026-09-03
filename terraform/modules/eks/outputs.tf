@@ -39,6 +39,11 @@ output "ebs_csi_role_arn" {
   value       = aws_iam_role.ebs_csi.arn
 }
 
+output "backend_role_arn" {
+  description = "IAM role ARN for the ShopVerse backend service account (IRSA)"
+  value       = aws_iam_role.backend.arn
+}
+
 output "oidc_provider_arn" {
   description = "OIDC provider ARN"
   value       = aws_iam_openid_connect_provider.eks.arn

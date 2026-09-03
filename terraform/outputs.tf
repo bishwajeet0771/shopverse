@@ -55,6 +55,11 @@ output "ebs_csi_role_arn" {
   value       = module.eks.ebs_csi_role_arn
 }
 
+output "backend_role_arn" {
+  description = "IAM role ARN for the ShopVerse backend service account (IRSA)"
+  value       = module.eks.backend_role_arn
+}
+
 # ──────────────────────────────────────────────
 # RDS Outputs
 # ──────────────────────────────────────────────

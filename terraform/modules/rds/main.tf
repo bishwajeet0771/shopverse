@@ -99,6 +99,6 @@ resource "aws_db_instance" "this" {
   })
 
   lifecycle {
-    ignore_changes = [final_snapshot_identifier]
+    ignore_changes = [password, final_snapshot_identifier]
   }
 }
