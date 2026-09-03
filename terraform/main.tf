@@ -55,7 +55,7 @@ module "rds" {
   instance_class = var.db_instance_class
   multi_az       = var.db_multi_az
   deletion_protection = var.db_deletion_protection
-
+  backup_retention_period = var.db_backup_retention_period
   tags = local.common_tags
 }
 

@@ -100,6 +100,12 @@ variable "db_deletion_protection" {
   default     = true
 }
 
+variable "db_backup_retention_period" {
+  description = "Automated backup retention in days (free-tier AWS accounts often cap this at 0-1)"
+  type        = number
+  default     = 0
+}
+
 # ──────────────────────────────────────────────
 # Jump Server (EC2)
 # ──────────────────────────────────────────────
