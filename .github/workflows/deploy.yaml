@@ -25,9 +25,6 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # Go
-      # ----------------------------------------------------------
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
@@ -41,9 +38,6 @@ jobs:
           go mod tidy
           go test ./...
 
-      # ----------------------------------------------------------
-      # Frontend
-      # ----------------------------------------------------------
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -84,13 +78,6 @@ jobs:
           cache: true
           cache-dependency-path: backend/go.sum
 
-      # ----------------------------------------------------------
-      # Build images
-      # (Dockerfile itself runs `go mod tidy` before compiling,
-      # so go.mod/go.sum are reconciled using the runner's network
-      # access at build time — no local Go environment needed.)
-      # ----------------------------------------------------------
-
       - name: Build frontend image
         run: |
           docker build \
@@ -102,10 +89,6 @@ jobs:
           docker build \
             -t shopverse-backend:scan \
             ./backend
-
-      # ----------------------------------------------------------
-      # Install Trivy
-      # ----------------------------------------------------------
 
       - name: Install Trivy
         run: |
@@ -122,10 +105,6 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -y trivy
 
-      # ----------------------------------------------------------
-      # Trivy frontend
-      # ----------------------------------------------------------
-
       - name: Run Trivy scan on frontend
         run: |
           trivy image \
@@ -134,10 +113,6 @@ jobs:
             --ignore-unfixed \
             --format table \
             shopverse-frontend:scan
-
-      # ----------------------------------------------------------
-      # Trivy backend
-      # ----------------------------------------------------------
 
       - name: Run Trivy scan on backend
         run: |
@@ -161,20 +136,12 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ----------------------------------------------------------
-      # AWS
-      # ----------------------------------------------------------
-
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           aws-region: ${{ env.AWS_REGION }}
-
-      # ----------------------------------------------------------
-      # ECR
-      # ----------------------------------------------------------
 
       - name: Login to Amazon ECR
         id: login-ecr
@@ -202,10 +169,6 @@ jobs:
 
           done
 
-      # ----------------------------------------------------------
-      # Build frontend
-      # ----------------------------------------------------------
-
       - name: Build and tag frontend image
         run: |
           docker build \
@@ -213,20 +176,12 @@ jobs:
             -t ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest \
             ./frontend
 
-      # ----------------------------------------------------------
-      # Build backend
-      # ----------------------------------------------------------
-
       - name: Build and tag backend image
         run: |
           docker build \
             -t ${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }} \
             -t ${{ env.ECR_REGISTRY }}/shopverse-backend:latest \
             ./backend
-
-      # ----------------------------------------------------------
-      # Push frontend
-      # ----------------------------------------------------------
 
       - name: Push frontend image
         run: |
@@ -236,10 +191,6 @@ jobs:
           docker push \
             ${{ env.ECR_REGISTRY }}/shopverse-frontend:latest
 
-      # ----------------------------------------------------------
-      # Push backend
-      # ----------------------------------------------------------
-
       - name: Push backend image
         run: |
           docker push \
@@ -247,10 +198,6 @@ jobs:
 
           docker push \
             ${{ env.ECR_REGISTRY }}/shopverse-backend:latest
-
-      # ----------------------------------------------------------
-      # Helm
-      # ----------------------------------------------------------
 
       - name: Install Helm
         uses: azure/setup-helm@v4
@@ -282,7 +229,7 @@ jobs:
 
 
   # ============================================================
-  # Stage 4: Provision Infrastructure + Deploy
+  # Stage 4: Provision Infrastructure (only if missing) + Deploy
   # ============================================================
   deploy:
     name: Provision Infra & Deploy
@@ -293,10 +240,6 @@ jobs:
 
       - name: Checkout repository
         uses: actions/checkout@v4
-
-      # ----------------------------------------------------------
-      # AWS
-      # ----------------------------------------------------------
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -317,22 +260,20 @@ jobs:
             --region "${{ env.AWS_REGION }}" >/dev/null 2>&1; then
 
             echo "cluster_exists=true" >> "$GITHUB_OUTPUT"
-
             echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' found."
 
           else
 
             echo "cluster_exists=false" >> "$GITHUB_OUTPUT"
-
-            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' NOT found."
+            echo "EKS cluster '${{ env.EKS_CLUSTER_NAME }}' NOT found. Will provision with Terraform."
 
           fi
 
       # ==========================================================
-      # Terraform — runs on every deploy, not just first creation.
-      # Required so RDS (and any other infra change) stays in sync,
-      # and so its endpoint can be read via `terraform output` every
-      # run. `terraform apply` is idempotent: no-op if nothing changed.
+      # Terraform — init always runs (needed to pull remote state
+      # so outputs can be read). plan/apply ONLY run when the EKS
+      # cluster doesn't exist yet, so existing infra is never
+      # touched by routine deploys.
       # ==========================================================
 
       - name: Setup Terraform
@@ -349,22 +290,23 @@ jobs:
             -backend-config="region=${{ env.AWS_REGION }}"
 
       - name: Terraform Plan
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
         run: |
           terraform plan \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="cluster_name=${{ env.EKS_CLUSTER_NAME }}" \
             -var="project_name=shopverse" \
-            -var="create_jump_server=false" \
             -out=tfplan
 
       - name: Terraform Apply
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
-        run: |
-          terraform apply \
-            -auto-approve \
-            tfplan
+        run: terraform apply -auto-approve tfplan
 
+      # terraform output reads straight from state — no plan/apply
+      # needed, so this always works whether infra was just created
+      # or already existed.
       - name: Read RDS endpoint from Terraform outputs
         id: rds
         working-directory: ./terraform
@@ -373,7 +315,7 @@ jobs:
           echo "port=$(terraform output -raw db_port)" >> "$GITHUB_OUTPUT"
 
       # ==========================================================
-      # Wait for EKS
+      # Wait for EKS (only relevant on first creation)
       # ==========================================================
 
       - name: Wait for EKS cluster to be active
@@ -395,11 +337,11 @@ jobs:
           echo "Cluster and nodes are ready."
 
       # ==========================================================
-      # Install/upgrade AWS Load Balancer Controller
-      # (idempotent — runs every deploy, not just first creation)
+      # Install AWS Load Balancer Controller (only on first creation)
       # ==========================================================
 
-      - name: Install/upgrade AWS Load Balancer Controller
+      - name: Install AWS Load Balancer Controller
+        if: steps.check-cluster.outputs.cluster_exists == 'false'
         run: |
 
           aws eks update-kubeconfig \
@@ -439,10 +381,6 @@ jobs:
           aws eks update-kubeconfig \
             --name "${{ env.EKS_CLUSTER_NAME }}" \
             --region "${{ env.AWS_REGION }}"
-
-      # ==========================================================
-      # Verify Kubernetes connection
-      # ==========================================================
 
       - name: Verify EKS connection
         run: |
@@ -497,12 +435,8 @@ jobs:
         run: |
 
           echo "Deploying ShopVerse..."
-
-          echo "Backend IAM role:"
-          echo "$BACKEND_ROLE_ARN"
-
-          echo "RDS endpoint:"
-          echo "${{ steps.rds.outputs.host }}:${{ steps.rds.outputs.port }}"
+          echo "Backend IAM role: $BACKEND_ROLE_ARN"
+          echo "RDS endpoint: ${{ steps.rds.outputs.host }}:${{ steps.rds.outputs.port }}"
 
           helm upgrade --install shopverse \
             oci://${{ env.ECR_REGISTRY }}/shopverse-helmchart/shopverse \
@@ -535,40 +469,21 @@ jobs:
 
           echo ""
           echo "========================================"
-          echo "           Service Accounts"
-          echo "========================================"
-          kubectl get serviceaccount \
-            -n shopverse
-
-          echo ""
-          echo "========================================"
-          echo "           Backend ServiceAccount"
-          echo "========================================"
-          kubectl describe serviceaccount \
-            shopverse-backend \
-            -n shopverse
-
-          echo ""
-          echo "========================================"
           echo "           Pods"
           echo "========================================"
-          kubectl get pods \
-            -n shopverse \
-            -o wide
+          kubectl get pods -n shopverse -o wide
 
           echo ""
           echo "========================================"
           echo "           Deployments"
           echo "========================================"
-          kubectl get deployments \
-            -n shopverse
+          kubectl get deployments -n shopverse
 
           echo ""
           echo "========================================"
           echo "           Services"
           echo "========================================"
-          kubectl get svc \
-            -n shopverse
+          kubectl get svc -n shopverse
 
           echo ""
           echo "========================================"
@@ -584,25 +499,13 @@ jobs:
           echo "========================================"
           echo "           Secrets"
           echo "========================================"
-          kubectl get secrets \
-            -n shopverse
+          kubectl get secrets -n shopverse
 
           echo ""
           echo "========================================"
           echo "           Ingress"
           echo "========================================"
-          kubectl get ingress \
-            -n shopverse \
-            2>/dev/null || echo "No ingress configured"
-
-          echo ""
-          echo "========================================"
-          echo "           Backend Pods"
-          echo "========================================"
-          kubectl get pods \
-            -n shopverse \
-            -l component=backend \
-            -o jsonpath='{range .items[*]}{.metadata.name}{" -> "}{.status.phase}{"\n"}{end}'
+          kubectl get ingress -n shopverse 2>/dev/null || echo "No ingress configured"
 
           echo ""
           echo "Deployment verification complete."
