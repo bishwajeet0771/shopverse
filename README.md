@@ -1,6 +1,8 @@
 # ShopVerse - Full-Stack E-Commerce Application
 
-A production-ready 3-tier e-commerce web application built with React, Go (Fiber), and MySQL, deployed on AWS EKS using Helm charts.
+> **⚠️ Database migration in progress:** this app now runs on **AWS RDS Postgres (db.t3.micro)** instead of the MySQL StatefulSet described below. See **[MIGRATION_NOTES.md](./MIGRATION_NOTES.md)** for what changed and what you need to configure. The MySQL-specific instructions further down (StatefulSet, `mysql` shell commands, `mysql.*` Helm values) are now outdated and kept only for historical reference until this doc is fully rewritten.
+
+A production-ready 3-tier e-commerce web application built with React, Go (Fiber), and Postgres (AWS RDS), deployed on AWS EKS using Helm charts.
 
 
 
