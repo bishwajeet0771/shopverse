@@ -1,32 +1,54 @@
 package database
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"os"
 	"time"
 
 	"github.com/shopverse/backend/internal/models"
-	"gorm.io/driver/mysql"
+	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
 )
 
 var DB *gorm.DB
 
+// resolveDBCredentials decides where to get DB connection details from:
+//   - If DB_SECRET_ARN is set (production / EKS), fetch from AWS Secrets
+//     Manager using the pod's IRSA-provided AWS credentials.
+//   - Otherwise (local dev / docker-compose), fall back to plain env vars.
+func resolveDBCredentials() (*DBCredentials, error) {
+	secretArn := os.Getenv("DB_SECRET_ARN")
+	if secretArn != "" {
+		region := getEnv("AWS_REGION", "us-east-1")
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		return fetchDBCredentialsFromSecretsManager(ctx, secretArn, region)
+	}
+
+	return &DBCredentials{
+		Username: getEnv("DB_USER", "shopverse"),
+		Password: getEnv("DB_PASSWORD", "shopverse123"),
+		Host:     getEnv("DB_HOST", "localhost"),
+		Port:     getEnv("DB_PORT", "5432"),
+		DBName:   getEnv("DB_NAME", "shopverse"),
+	}, nil
+}
+
 func Connect() {
-	dbUser := getEnv("DB_USER", "shopverse")
-	dbPassword := getEnv("DB_PASSWORD", "shopverse123")
-	dbHost := getEnv("DB_HOST", "localhost")
-	dbPort := getEnv("DB_PORT", "3306")
-	dbName := getEnv("DB_NAME", "shopverse")
+	creds, err := resolveDBCredentials()
+	if err != nil {
+		log.Fatalf("Failed to resolve DB credentials: %v", err)
+	}
 
-	dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?charset=utf8mb4&parseTime=True&loc=Local",
-		dbUser, dbPassword, dbHost, dbPort, dbName)
+	sslMode := getEnv("DB_SSLMODE", "require")
+	dsn := fmt.Sprintf("host=%s port=%s user=%s password=%s dbname=%s sslmode=%s TimeZone=UTC",
+		creds.Host, creds.Port, creds.Username, creds.Password, creds.DBName, sslMode)
 
-	var err error
 	for i := 1; i <= 10; i++ {
-		DB, err = gorm.Open(mysql.Open(dsn), &gorm.Config{
+		DB, err = gorm.Open(postgres.Open(dsn), &gorm.Config{
 			Logger: logger.Default.LogMode(logger.Info),
 		})
 		if err == nil {
