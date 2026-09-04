@@ -1,20 +1,19 @@
 version: "3.8"
 
 services:
-  mysql:
-    image: mysql:8.0
-    container_name: shopverse-mysql
+  postgres:
+    image: postgres:16-alpine
+    container_name: shopverse-postgres
     environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: shopverse
-      MYSQL_USER: shopverse
-      MYSQL_PASSWORD: shopverse123
+      POSTGRES_DB: shopverse
+      POSTGRES_USER: shopverse
+      POSTGRES_PASSWORD: shopverse123
     ports:
-      - "3306:3306"
+      - "5432:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      test: ["CMD-SHELL", "pg_isready -U shopverse -d shopverse"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -25,15 +24,16 @@ services:
     ports:
       - "8080:8080"
     environment:
-      DB_HOST: mysql
-      DB_PORT: "3306"
+      DB_HOST: postgres
+      DB_PORT: "5432"
       DB_NAME: shopverse
       DB_USER: shopverse
       DB_PASSWORD: shopverse123
+      DB_SSLMODE: disable
       JWT_SECRET: local-dev-jwt-secret-key
       FRONTEND_ORIGIN: http://localhost:3000
     depends_on:
-      mysql:
+      postgres:
         condition: service_healthy
     restart: unless-stopped
 
@@ -50,4 +50,4 @@ services:
     restart: unless-stopped
 
 volumes:
-  mysql_data:
+  postgres_data:
