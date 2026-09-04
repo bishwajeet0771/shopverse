@@ -81,3 +81,36 @@ variable "jump_server_allowed_ssh_cidrs" {
   type        = list(string)
   default     = ["0.0.0.0/0"]
 }
+
+# ──────────────────────────────────────────────
+# RDS (Postgres)
+# ──────────────────────────────────────────────
+variable "db_name" {
+  description = "Initial Postgres database name"
+  type        = string
+  default     = "shopverse"
+}
+
+variable "db_username" {
+  description = "Master username for RDS"
+  type        = string
+  default     = "shopverse_admin"
+}
+
+variable "db_password" {
+  description = "Master password for RDS - set manually via -var, TF_VAR_db_password env var, or a CI secret. Do NOT put this in terraform.tfvars."
+  type        = string
+  sensitive   = true
+}
+
+variable "db_instance_class" {
+  description = "RDS instance class"
+  type        = string
+  default     = "db.t3.micro"
+}
+
+variable "db_allocated_storage" {
+  description = "RDS initial storage size in GB"
+  type        = number
+  default     = 20
+}
