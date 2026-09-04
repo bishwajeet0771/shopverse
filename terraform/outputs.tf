@@ -56,6 +56,29 @@ output "ebs_csi_role_arn" {
 }
 
 # ──────────────────────────────────────────────
+# RDS Outputs
+# ──────────────────────────────────────────────
+output "rds_endpoint" {
+  description = "RDS Postgres endpoint (hostname)"
+  value       = module.rds.db_endpoint
+}
+
+output "rds_port" {
+  description = "RDS Postgres port"
+  value       = module.rds.db_port
+}
+
+output "rds_secret_arn" {
+  description = "Secrets Manager ARN holding the DB connection details"
+  value       = module.rds.db_secret_arn
+}
+
+output "backend_irsa_role_arn" {
+  description = "IAM role ARN for the backend pod (IRSA) to read the DB secret"
+  value       = aws_iam_role.backend_irsa.arn
+}
+
+# ──────────────────────────────────────────────
 # Jump Server Outputs
 # ──────────────────────────────────────────────
 output "jump_server_public_ip" {
