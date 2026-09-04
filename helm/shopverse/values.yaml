@@ -21,24 +21,19 @@ backend:
   servicePort: 8080
   ingressName: shopverse-backend-ingress
   ingressHost: ""
+  # IAM role ARN for IRSA (terraform output: backend_irsa_role_arn)
+  irsaRoleArn: ""
 
 # ──────────────────────────────────────
-# MySQL
+# RDS (Postgres) - connection details are fetched from
+# Secrets Manager by the backend pod itself; Helm only
+# needs to pass through the secret ARN and AWS region.
 # ──────────────────────────────────────
-mysql:
-  database: shopverse
-  user: shopverse
-  rootPassword: ""
-  password: ""
-  storage: 5Gi
-  storageClass: gp2
-  resources:
-    limits:
-      memory: "512Mi"
-      cpu: "500m"
-    requests:
-      memory: "256Mi"
-      cpu: "250m"
+rds:
+  secretArn: ""  # terraform output: rds_secret_arn
+
+aws:
+  region: ""  # e.g. us-east-1
 
 # ──────────────────────────────────────
 # Shared
