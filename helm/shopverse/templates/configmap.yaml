@@ -5,8 +5,7 @@ metadata:
   labels:
     app: shopverse
 data:
-  DB_HOST: shopverse-mysql
-  DB_PORT: "3306"
-  DB_NAME: {{ .Values.mysql.database | quote }}
-  DB_USER: {{ .Values.mysql.user | quote }}
+  DB_SECRET_ARN: {{ .Values.rds.secretArn | quote }}
+  DB_SSLMODE: "require"
+  AWS_REGION: {{ .Values.aws.region | quote }}
   FRONTEND_ORIGIN: "*"
