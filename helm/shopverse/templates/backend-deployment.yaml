@@ -17,6 +17,7 @@ spec:
         app: shopverse
         component: backend
     spec:
+      serviceAccountName: shopverse-backend
       containers:
         - name: backend
           image: {{ .Values.backend.image | quote }}
@@ -28,11 +29,6 @@ spec:
             - configMapRef:
                 name: shopverse-config
           env:
-            - name: DB_PASSWORD
-              valueFrom:
-                secretKeyRef:
-                  name: shopverse-secret
-                  key: DB_PASSWORD
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
