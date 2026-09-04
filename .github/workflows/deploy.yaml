@@ -183,13 +183,15 @@ jobs:
           fi
 
       - name: Setup Terraform
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        # Always set up (see Terraform Init note below)
         uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: "1.7.0"
 
       - name: Terraform Init
-        if: steps.check-cluster.outputs.cluster_exists == 'false'
+        # Always init (not gated on cluster_exists) - even when the cluster
+        # already exists we still need to read RDS/IRSA outputs from state
+        # further down for the Helm deploy step.
         working-directory: ./terraform
         run: |
           terraform init \
@@ -200,18 +202,30 @@ jobs:
       - name: Terraform Plan
         if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_MASTER_PASSWORD }}
         run: |
           terraform plan \
             -var="aws_region=${{ env.AWS_REGION }}" \
             -var="cluster_name=${{ env.EKS_CLUSTER_NAME }}" \
             -var="project_name=shopverse" \
             -var="create_jump_server=false" \
+            -var="db_instance_class=db.t3.micro" \
             -out=tfplan
 
       - name: Terraform Apply
         if: steps.check-cluster.outputs.cluster_exists == 'false'
         working-directory: ./terraform
+        env:
+          TF_VAR_db_password: ${{ secrets.DB_MASTER_PASSWORD }}
         run: terraform apply -auto-approve tfplan
+
+      - name: Capture RDS + IRSA Terraform outputs
+        id: tf-outputs
+        working-directory: ./terraform
+        run: |
+          echo "rds_secret_arn=$(terraform output -raw rds_secret_arn)" >> "$GITHUB_OUTPUT"
+          echo "backend_irsa_role_arn=$(terraform output -raw backend_irsa_role_arn)" >> "$GITHUB_OUTPUT"
 
       - name: Wait for EKS cluster to be active
         if: steps.check-cluster.outputs.cluster_exists == 'false'
@@ -259,8 +273,9 @@ jobs:
             --version "1.0.0-${{ github.sha }}" \
             --set "frontend.image=${{ env.ECR_REGISTRY }}/shopverse-frontend:${{ github.sha }}" \
             --set "backend.image=${{ env.ECR_REGISTRY }}/shopverse-backend:${{ github.sha }}" \
-            --set-string "mysql.rootPassword=${{ secrets.MYSQL_ROOT_PASSWORD }}" \
-            --set-string "mysql.password=${{ secrets.MYSQL_PASSWORD }}" \
+            --set-string "rds.secretArn=${{ steps.tf-outputs.outputs.rds_secret_arn }}" \
+            --set-string "backend.irsaRoleArn=${{ steps.tf-outputs.outputs.backend_irsa_role_arn }}" \
+            --set-string "aws.region=${{ env.AWS_REGION }}" \
             --set-string "jwtSecret=${{ secrets.JWT_SECRET }}" \
             --namespace shopverse \
             --create-namespace \
